@@ -2,9 +2,9 @@ name: Android CI
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ "superball", "tvhockey", "tvhockey2", "threecats", "buttons", "tanks" ]
   pull_request:
-    branches: [ "main", "master" ]
+    branches: [ "superball", "tvhockey", "tvhockey2", "threecats", "buttons", "tanks" ]
 
 jobs:
   build:
