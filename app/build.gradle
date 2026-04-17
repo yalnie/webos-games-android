@@ -1,0 +1,25 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace 'com.p2995080.p133850'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId "com.p2995080.p133850"
+        minSdkVersion 4 // i tested it on galaxy ace and it crashes, maybe ram i think...
+        targetSdk 36
+        versionCode 1
+        versionName "3.1.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+dependencies {
+    // i dont need it now
+}

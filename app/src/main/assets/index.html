@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="ru" >
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=1280, user-scalable=no">
+        <title>Superball</title>
+        <link href="css/main.css" rel="stylesheet" type="text/css" />
+        <script src="js/jquery-1.8.2.min.js"></script>
+        <script src="js/keys.js"></script>
+        <script src="js/lib/LGBlockNavigation_V2.2.js"></script>
+        <script src="js/lib/webOS.js"></script>
+        <script src="js/patternLevels.js"></script>
+        <script src="js/script.js"></script>
+    </head>
+    <body onload="start();">
+        <div id="preloader" style="position: absolute; top: 0px; left: 0px; width: 100%; height: 100%; display: block;">
+            <div style="position:absolute; top: 50%; left: 50%; margin-left: -31px; ">
+                <img src="images/ajax_loader.gif">
+            </div>
+        </div>
+        <div class="screen" id="menu">
+            <div onclick="show_game();" id="start_game"></div>
+            <div id="high_score"></div>
+            <div id="lang" onclick="change_lang_en();"></div>
+            <!--<div id="music" onclick="change_music(false);"></div>-->
+            <div id="back" onclick="backHandler()"></div>
+            <div id="info" onclick="open_help();"></div>
+        </div>
+        <div class="screen" id="game">
+            <div class="back-control" tabindex="0" onclick="restart()">< Back</div>
+            <div id="scene">
+                <img id="ball" src="images/shar.png">
+                <div id="platform">
+                    <div id="platform_l"></div>
+                    <div id="platform_c"></div>
+                    <div id="platform_r"></div>
+                </div>
+            </div>
+            <div id="Level">�������: 0</div>
+            <div id="Lifes">�����: 3</div>
+            <!--<div id="Time">�����: 0</div>-->
+            <div id="ScoreCur">����: 0</div>
+        </div>
+        <div class="screen" id="continue" style="display: none;">
+            <ul class="buttons">
+                <li id="pause"></li>
+                <li id="cont" onclick="show_continue();"></li>
+                <li id="end_gameP" class="end_game" onclick="end_game();"></li>
+            </ul>
+        </div>
+        <div class="screen" id="help">
+            <ul class="buttons">
+                <img id="help_eng" src="images/help_eng.png" class="help_img">
+                <img id="help_ru" src="images/help_ru.png" class="help_img">
+                <li id="close_help" onclick="close_help();"></li>
+            </ul>
+        </div>
+        <div class="screen" id="score">
+            <ul class="buttons">
+                <li id="game_over"></li>
+                <li id="best_score"></li>
+                <li id="current_score"></li><br />
+                <li id="game_again" onclick="game_again();"></li>
+                <li id="end_gameS" class="end_game" onclick="end_game();"></li>
+            </ul>
+        </div>
+        <object type="application/x-netcast-info"
+                id="device"
+                width="0"
+                height="0">
+        </object>
+        <!--<object type="audio/x-mp3"
+                id="sound_bg"
+                data="media/background.mp3"
+                width="0"
+                autoStart="false"
+                height="0">
+        </object>-->
+        <!--<object type="audio/x-ms-wma"
+                data="media/bot_jump.wav"
+                width="0"
+                height="0"
+                autoStart="false"
+                id="coll_sound">
+        </object>-->
+        <script type="text/javascript">
+
+        var _gaq = _gaq || [];
+        _gaq.push(['_setAccount', 'UA-39432189-1']);
+        _gaq.push(['_trackPageview']);
+
+        (function() {
+            var ga = document.createElement('script');
+            ga.type = 'text/javascript';
+            ga.async = true;
+            ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+            var s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(ga, s);
+        })();
+
+        </script>
+    </body>
+</html>
