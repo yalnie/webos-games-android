@@ -20,7 +20,7 @@ public class MainActivity extends SDLActivity {
     @Override
     protected String[] getLibraries() {
         return new String[] {
-            "stdc++",
+            "gnustl_shared",
             "SDL2",
             "SDL2_mixer",
             "mainstream_loader"

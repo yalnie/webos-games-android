@@ -8,6 +8,7 @@
 #include <dlfcn.h>
 #include <elf.h>
 #include <pthread.h>
+#include <math.h>
 #include <errno.h>
 #include <android/log.h>
 
@@ -48,6 +49,15 @@ struct SymbolOverride {
 static void *dummy_stub(void) {
     LOGW("Called unhandled stub!");
     return NULL;
+}
+
+static int stub_isnan(double x) {
+    return isnan(x);
+}
+
+static void stub_sincosf(float x, float *s, float *c) {
+    if (s) *s = sinf(x);
+    if (c) *c = cosf(x);
 }
 
 static const struct SymbolOverride g_overrides[] = {
@@ -92,10 +102,13 @@ static const struct SymbolOverride g_overrides[] = {
     { "json_object_get_double", (void *)json_object_get_double },
     { "json_object_get_type", (void *)json_object_get_type },
 
-    /* Libc overrides */
+    /* Libc / Math overrides */
     { "ftime", (void *)ftime },
     { "__pthread_key_create", (void *)pthread_key_create },
     { "__isoc99_sscanf", (void *)sscanf },
+    { "__isnan", (void *)stub_isnan },
+    { "sincosf", (void *)stub_sincosf },
+    { "__gmon_start__", (void *)dummy_stub },
 
     { NULL, NULL }
 };
@@ -127,11 +140,11 @@ static void *resolve_symbol(const char *name) {
         }
     }
 
-    /* 2. Try GNU libstdc++ */
+    /* 2. Try GNU STL (libgnustl_shared) */
     if (g_libstdcpp) {
-        void *sym = dlsym(g_libstdcpp, name);
+        void *sym = dlsym(g_libstdcpp, clean_name);
         if (sym) return sym;
-        sym = dlsym(g_libstdcpp, clean_name);
+        sym = dlsym(g_libstdcpp, name);
         if (sym) return sym;
     }
 
@@ -170,15 +183,12 @@ int SDL_main(int argc, char *argv[]) {
         return 1;
     }
 
-    /* 3. Pre-load bundled GNU libstdc++ */
-    g_libstdcpp = dlopen("libstdc++.so", RTLD_GLOBAL | RTLD_NOW);
-    if (!g_libstdcpp) {
-        g_libstdcpp = dlopen("libstdc++.so.6", RTLD_GLOBAL | RTLD_NOW);
-    }
+    /* 3. Pre-load bundled GNU STL */
+    g_libstdcpp = dlopen("libgnustl_shared.so", RTLD_GLOBAL | RTLD_NOW);
     if (g_libstdcpp) {
-        LOGI("Successfully loaded GNU libstdc++");
+        LOGI("Successfully loaded GNU STL (libgnustl_shared.so)");
     } else {
-        LOGW("Could not load libstdc++.so: %s", dlerror());
+        LOGW("Could not load libgnustl_shared.so: %s", dlerror());
     }
 
     /* 4. Map PT_LOAD Segment 0 (Code/RO Data) at fixed base 0x8000 */
