@@ -60,6 +60,32 @@ static void stub_sincosf(float x, float *s, float *c) {
     if (c) *c = cosf(x);
 }
 
+typedef void (*real_basic_ios_init_t)(void *ios, void *sb);
+static real_basic_ios_init_t s_real_basic_ios_init = NULL;
+
+typedef void (*locale_ctor_t)(void *loc);
+static locale_ctor_t s_locale_ctor = NULL;
+
+static void override_basic_ios_init(void *ios, void *sb) {
+    if (ios) {
+        void **loc_ptr = (void **)((char *)ios + 0x6c);
+        if (!*loc_ptr) {
+            if (!s_locale_ctor && g_libstdcpp) {
+                s_locale_ctor = (locale_ctor_t)dlsym(g_libstdcpp, "_ZNSt6localeC1Ev");
+            }
+            if (s_locale_ctor) {
+                s_locale_ctor(loc_ptr);
+            }
+        }
+    }
+    if (!s_real_basic_ios_init && g_libstdcpp) {
+        s_real_basic_ios_init = (real_basic_ios_init_t)dlsym(g_libstdcpp, "_ZNSt9basic_iosIcSt11char_traitsIcEE4initEPSt15basic_streambufIcS1_E");
+    }
+    if (s_real_basic_ios_init) {
+        s_real_basic_ios_init(ios, sb);
+    }
+}
+
 static const struct SymbolOverride g_overrides[] = {
     /* NDL */
     { "NDL_ServiceInit", (void *)NDL_ServiceInit },
@@ -102,13 +128,14 @@ static const struct SymbolOverride g_overrides[] = {
     { "json_object_get_double", (void *)json_object_get_double },
     { "json_object_get_type", (void *)json_object_get_type },
 
-    /* Libc / Math overrides */
+    /* Libc / Math / C++ overrides */
     { "ftime", (void *)ftime },
     { "__pthread_key_create", (void *)pthread_key_create },
     { "__isoc99_sscanf", (void *)sscanf },
     { "__isnan", (void *)stub_isnan },
     { "sincosf", (void *)stub_sincosf },
     { "__gmon_start__", (void *)dummy_stub },
+    { "_ZNSt9basic_iosIcSt11char_traitsIcEE4initEPSt15basic_streambufIcS1_E", (void *)override_basic_ios_init },
 
     { NULL, NULL }
 };
