@@ -7,6 +7,7 @@
 #include <sys/mman.h>
 #include <dlfcn.h>
 #include <elf.h>
+#include <pthread.h>
 #include <errno.h>
 #include <android/log.h>
 
@@ -25,6 +26,9 @@
 #define INIT_ARRAY 0x001db000
 #define INIT_COUNT 8
 #define GAME_ENTRY 0x0003015c
+
+static FILE *g_stderr_ptr = NULL;
+static FILE *g_stdout_ptr = NULL;
 
 /* Custom symbol resolution table */
 struct SymbolOverride {
@@ -83,14 +87,21 @@ static const struct SymbolOverride g_overrides[] = {
     { "ftime", (void *)ftime },
     { "__pthread_key_create", (void *)pthread_key_create },
     { "__isoc99_sscanf", (void *)sscanf },
-    { "stderr", (void *)&stderr },
-    { "stdout", (void *)&stdout },
 
     { NULL, NULL }
 };
 
 static void *resolve_symbol(const char *name) {
     if (!name || !*name) return NULL;
+
+    if (strcmp(name, "stderr") == 0) {
+        if (!g_stderr_ptr) g_stderr_ptr = stderr;
+        return &g_stderr_ptr;
+    }
+    if (strcmp(name, "stdout") == 0) {
+        if (!g_stdout_ptr) g_stdout_ptr = stdout;
+        return &g_stdout_ptr;
+    }
 
     /* 1. Check custom overrides */
     for (int i = 0; g_overrides[i].name != NULL; i++) {
