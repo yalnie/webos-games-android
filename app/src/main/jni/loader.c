@@ -27,8 +27,17 @@
 #define INIT_COUNT 8
 #define GAME_ENTRY 0x0003015c
 
+/* Absolute virtual addresses of dynamic ELF tables in mainstream */
+#define DYNSYM_ADDR  0x0000d370
+#define DYNSTR_ADDR  0x00017c10
+#define REL_DYN_ADDR 0x0002e088
+#define REL_DYN_SIZE 0x000000d8
+#define REL_PLT_ADDR 0x0002e160
+#define REL_PLT_SIZE 0x00000b50
+
 static FILE *g_stderr_ptr = NULL;
 static FILE *g_stdout_ptr = NULL;
+static void *g_libstdcpp = NULL;
 
 /* Custom symbol resolution table */
 struct SymbolOverride {
@@ -94,44 +103,47 @@ static const struct SymbolOverride g_overrides[] = {
 static void *resolve_symbol(const char *name) {
     if (!name || !*name) return NULL;
 
-    if (strcmp(name, "stderr") == 0) {
+    /* Clean version suffix if present (e.g. '@GLIBC_2.4', '@GLIBCXX_3.4') */
+    char clean_name[256];
+    strncpy(clean_name, name, sizeof(clean_name) - 1);
+    clean_name[sizeof(clean_name) - 1] = '\0';
+    char *at = strchr(clean_name, '@');
+    if (at) *at = '\0';
+
+    /* Standard stream pointers */
+    if (strcmp(clean_name, "stderr") == 0) {
         if (!g_stderr_ptr) g_stderr_ptr = stderr;
         return &g_stderr_ptr;
     }
-    if (strcmp(name, "stdout") == 0) {
+    if (strcmp(clean_name, "stdout") == 0) {
         if (!g_stdout_ptr) g_stdout_ptr = stdout;
         return &g_stdout_ptr;
     }
 
     /* 1. Check custom overrides */
     for (int i = 0; g_overrides[i].name != NULL; i++) {
-        if (strcmp(g_overrides[i].name, name) == 0) {
+        if (strcmp(g_overrides[i].name, clean_name) == 0) {
             return g_overrides[i].func;
         }
     }
 
-    /* 2. Try exact name via dlsym */
-    void *sym = dlsym(RTLD_DEFAULT, name);
-    if (sym) return sym;
-
-    /* 3. Strip version suffix (e.g. '@GLIBC_2.4', '@GLIBCXX_3.4') */
-    char stripped[256];
-    strncpy(stripped, name, sizeof(stripped) - 1);
-    stripped[sizeof(stripped) - 1] = '\0';
-    char *at = strchr(stripped, '@');
-    if (at) {
-        *at = '\0';
-        /* Check overrides with stripped name */
-        for (int i = 0; g_overrides[i].name != NULL; i++) {
-            if (strcmp(g_overrides[i].name, stripped) == 0) {
-                return g_overrides[i].func;
-            }
-        }
-        sym = dlsym(RTLD_DEFAULT, stripped);
+    /* 2. Try GNU libstdc++ */
+    if (g_libstdcpp) {
+        void *sym = dlsym(g_libstdcpp, name);
+        if (sym) return sym;
+        sym = dlsym(g_libstdcpp, clean_name);
         if (sym) return sym;
     }
 
-    LOGW("Unresolved symbol: %s (stripped: %s)", name, stripped);
+    /* 3. Try global dlsym with clean_name */
+    void *sym = dlsym(RTLD_DEFAULT, clean_name);
+    if (sym) return sym;
+
+    /* 4. Try global dlsym with full name */
+    sym = dlsym(RTLD_DEFAULT, name);
+    if (sym) return sym;
+
+    LOGW("Unresolved symbol: %s (%s)", name, clean_name);
     return (void *)dummy_stub;
 }
 
@@ -151,7 +163,6 @@ int SDL_main(int argc, char *argv[]) {
     /* 2. Open binary */
     FILE *f = fopen("mainstream", "rb");
     if (!f) {
-        /* Try current directory or fallback */
         f = fopen("./mainstream", "rb");
     }
     if (!f) {
@@ -160,14 +171,17 @@ int SDL_main(int argc, char *argv[]) {
     }
 
     /* 3. Pre-load bundled GNU libstdc++ */
-    void *libstdcpp = dlopen("libstdc++.so.6", RTLD_GLOBAL | RTLD_NOW);
-    if (libstdcpp) {
-        LOGI("Successfully loaded libstdc++.so.6");
+    g_libstdcpp = dlopen("libstdc++.so", RTLD_GLOBAL | RTLD_NOW);
+    if (!g_libstdcpp) {
+        g_libstdcpp = dlopen("libstdc++.so.6", RTLD_GLOBAL | RTLD_NOW);
+    }
+    if (g_libstdcpp) {
+        LOGI("Successfully loaded GNU libstdc++");
     } else {
-        LOGW("Could not load libstdc++.so.6 directly: %s (will fallback to libc++)", dlerror());
+        LOGW("Could not load libstdc++.so: %s", dlerror());
     }
 
-    /* 4. Map PT_LOAD Segment 0 (Code/RO Data) */
+    /* 4. Map PT_LOAD Segment 0 (Code/RO Data) at fixed base 0x8000 */
     void *code_map = mmap((void *)CODE_BASE, CODE_SIZE,
                           PROT_READ | PROT_WRITE,
                           MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
@@ -184,7 +198,7 @@ int SDL_main(int argc, char *argv[]) {
         return 1;
     }
 
-    /* 5. Map PT_LOAD Segment 1 (Data / BSS) */
+    /* 5. Map PT_LOAD Segment 1 (Data / BSS) at fixed base 0x1db000 */
     void *data_map = mmap((void *)DATA_BASE, DATA_SIZE,
                           PROT_READ | PROT_WRITE,
                           MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
@@ -205,15 +219,14 @@ int SDL_main(int argc, char *argv[]) {
     /* Zero out BSS */
     memset((char *)data_map + file_data_size, 0, DATA_SIZE - file_data_size);
 
-    /* 6. Read dynamic symbol table and string table for relocations */
-    /* .dynsym at 0xd370, size 0xa8a0 (count 2698 entries of 16 bytes) */
-    Elf32_Sym *dynsym = (Elf32_Sym *)((char *)code_map + 0xd370);
-    const char *dynstr = (const char *)((char *)code_map + 0x17c10);
+    /* 6. Dynamic symbol table and string table (mapped at their fixed virtual addresses) */
+    Elf32_Sym *dynsym = (Elf32_Sym *)DYNSYM_ADDR;
+    const char *dynstr = (const char *)DYNSTR_ADDR;
 
-    /* 7. Process .rel.plt (offset 0x2e160 in memory, size 0xb50 = 362 entries) */
-    Elf32_Rel *rel_plt = (Elf32_Rel *)((char *)code_map + 0x2e160);
-    size_t plt_count = 0xb50 / sizeof(Elf32_Rel);
-    LOGI("Relocating %zu PLT entries...", plt_count);
+    /* 7. Process .rel.plt (at fixed virtual address 0x2e160, 362 entries) */
+    Elf32_Rel *rel_plt = (Elf32_Rel *)REL_PLT_ADDR;
+    size_t plt_count = REL_PLT_SIZE / sizeof(Elf32_Rel);
+    LOGI("Relocating %zu PLT entries from %p...", plt_count, rel_plt);
 
     for (size_t i = 0; i < plt_count; i++) {
         uint32_t r_offset = rel_plt[i].r_offset;
@@ -231,10 +244,10 @@ int SDL_main(int argc, char *argv[]) {
         }
     }
 
-    /* 8. Process .rel.dyn (offset 0x2e088 in memory, size 0xd8 = 27 entries) */
-    Elf32_Rel *rel_dyn = (Elf32_Rel *)((char *)code_map + 0x2e088);
-    size_t dyn_count = 0xd8 / sizeof(Elf32_Rel);
-    LOGI("Relocating %zu DYN entries...", dyn_count);
+    /* 8. Process .rel.dyn (at fixed virtual address 0x2e088, 27 entries) */
+    Elf32_Rel *rel_dyn = (Elf32_Rel *)REL_DYN_ADDR;
+    size_t dyn_count = REL_DYN_SIZE / sizeof(Elf32_Rel);
+    LOGI("Relocating %zu DYN entries from %p...", dyn_count, rel_dyn);
 
     for (size_t i = 0; i < dyn_count; i++) {
         uint32_t r_offset = rel_dyn[i].r_offset;
@@ -248,7 +261,7 @@ int SDL_main(int argc, char *argv[]) {
         if (r_type == R_ARM_GLOB_DAT) {
             *(uintptr_t *)r_offset = (uintptr_t)resolved;
         } else if (r_type == R_ARM_COPY) {
-            if (resolved) {
+            if (resolved && resolved != (void *)dummy_stub && dynsym[sym_idx].st_size > 0) {
                 memcpy((void *)r_offset, resolved, dynsym[sym_idx].st_size);
             }
         }
