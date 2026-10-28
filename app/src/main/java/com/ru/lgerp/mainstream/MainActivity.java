@@ -29,6 +29,9 @@ public class MainActivity extends SDLActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        // Extract assets to internal files directory BEFORE SDL initializes or starts threads
+        extractAssetsIfNeeded();
+
         super.onCreate(savedInstanceState);
 
         // Keep screen on while playing
@@ -42,17 +45,14 @@ public class MainActivity extends SDLActivity {
                 | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                 | View.SYSTEM_UI_FLAG_FULLSCREEN
                 | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
-
-        // Extract assets to internal files directory if not already done
-        extractAssetsIfNeeded();
     }
 
     private void extractAssetsIfNeeded() {
         File filesDir = getFilesDir();
-        File marker = new File(filesDir, ".assets_extracted_v1");
+        File marker = new File(filesDir, ".assets_extracted_v2");
         if (!marker.exists()) {
             Log.i(TAG, "Extracting assets to " + filesDir.getAbsolutePath() + "...");
-            copyAssetFolder(getAssets(), "", filesDir.getAbsolutePath());
+            copyAsset(getAssets(), "", filesDir);
             try {
                 marker.createNewFile();
             } catch (IOException e) {
@@ -62,49 +62,57 @@ public class MainActivity extends SDLActivity {
         }
     }
 
-    private boolean copyAssetFolder(AssetManager assetManager, String fromAssetPath, String toPath) {
+    private void copyAsset(AssetManager assetManager, String path, File destDir) {
+        if (!path.isEmpty()) {
+            // Try opening as file first
+            try (InputStream in = assetManager.open(path)) {
+                File destFile = new File(destDir, path);
+                if (destFile.isDirectory()) {
+                    deleteRecursive(destFile);
+                }
+                File parent = destFile.getParentFile();
+                if (parent != null) parent.mkdirs();
+                try (OutputStream out = new FileOutputStream(destFile)) {
+                    byte[] buffer = new byte[8192];
+                    int read;
+                    while ((read = in.read(buffer)) != -1) {
+                        out.write(buffer, 0, read);
+                    }
+                    out.flush();
+                }
+                destFile.setExecutable(true, false);
+                return;
+            } catch (IOException notAFile) {
+                // Not a file, proceed to list as directory
+            }
+        }
+
+        // It is a directory, list contents
         try {
-            String[] files = assetManager.list(fromAssetPath);
-            new File(toPath).mkdirs();
-            boolean res = true;
+            String[] files = assetManager.list(path);
             if (files != null) {
                 for (String file : files) {
-                    if (file.equals("images") || file.equals("sounds") || file.equals("webkit")) {
+                    if (path.isEmpty() && (file.equals("images") || file.equals("sounds") || file.equals("webkit"))) {
                         continue;
                     }
-                    String subAsset = fromAssetPath.isEmpty() ? file : fromAssetPath + "/" + file;
-                    String subDest = toPath + "/" + file;
-                    String[] subFiles = assetManager.list(subAsset);
-                    if (subFiles != null && subFiles.length > 0) {
-                        res &= copyAssetFolder(assetManager, subAsset, subDest);
-                    } else {
-                        res &= copyAssetFile(assetManager, subAsset, subDest);
-                    }
+                    String subPath = path.isEmpty() ? file : path + "/" + file;
+                    copyAsset(assetManager, subPath, destDir);
                 }
             }
-            return res;
-        } catch (Exception e) {
-            Log.e(TAG, "copyAssetFolder error on: " + fromAssetPath, e);
-            return false;
+        } catch (IOException e) {
+            Log.e(TAG, "Failed to list asset directory: " + path, e);
         }
     }
 
-    private boolean copyAssetFile(AssetManager assetManager, String fromAssetPath, String toPath) {
-        File destFile = new File(toPath);
-        if (destFile.exists()) return true;
-        try (InputStream in = assetManager.open(fromAssetPath);
-             OutputStream out = new FileOutputStream(destFile)) {
-            byte[] buffer = new byte[8192];
-            int read;
-            while ((read = in.read(buffer)) != -1) {
-                out.write(buffer, 0, read);
+    private void deleteRecursive(File fileOrDirectory) {
+        if (fileOrDirectory.isDirectory()) {
+            File[] children = fileOrDirectory.listFiles();
+            if (children != null) {
+                for (File child : children) {
+                    deleteRecursive(child);
+                }
             }
-            out.flush();
-            destFile.setExecutable(true, false);
-            return true;
-        } catch (Exception e) {
-            Log.e(TAG, "copyAssetFile failed: " + fromAssetPath, e);
-            return false;
         }
+        fileOrDirectory.delete();
     }
 }

@@ -86,6 +86,22 @@ static void override_basic_ios_init(void *ios, void *sb) {
     }
 }
 
+typedef void (*real_string_reserve_t)(void *str, size_t n);
+static real_string_reserve_t s_real_string_reserve = NULL;
+
+static void override_string_reserve(void *str, size_t n) {
+    if (n >= 0x70000000) {
+        LOGW("Intercepted invalid std::string::reserve(%zu), clamping to 0", n);
+        return;
+    }
+    if (!s_real_string_reserve && g_libstdcpp) {
+        s_real_string_reserve = (real_string_reserve_t)dlsym(g_libstdcpp, "_ZNSs7reserveEj");
+    }
+    if (s_real_string_reserve) {
+        s_real_string_reserve(str, n);
+    }
+}
+
 static const struct SymbolOverride g_overrides[] = {
     /* NDL */
     { "NDL_ServiceInit", (void *)NDL_ServiceInit },
@@ -136,6 +152,7 @@ static const struct SymbolOverride g_overrides[] = {
     { "sincosf", (void *)stub_sincosf },
     { "__gmon_start__", (void *)dummy_stub },
     { "_ZNSt9basic_iosIcSt11char_traitsIcEE4initEPSt15basic_streambufIcS1_E", (void *)override_basic_ios_init },
+    { "_ZNSs7reserveEj", (void *)override_string_reserve },
 
     { NULL, NULL }
 };
@@ -325,6 +342,16 @@ int SDL_main(int argc, char *argv[]) {
     }
 
     /* 11. Launch game main */
+    FILE *test_appinfo = fopen("appinfo.json", "rb");
+    if (test_appinfo) {
+        fseek(test_appinfo, 0, SEEK_END);
+        long sz = ftell(test_appinfo);
+        fclose(test_appinfo);
+        LOGI("Verified appinfo.json exists (size: %ld bytes)", sz);
+    } else {
+        LOGE("Warning: appinfo.json open failed: %s (cwd: %s)", strerror(errno), internal_path ? internal_path : ".");
+    }
+
     typedef int (*game_main_t)(int, char **);
     game_main_t game_main = (game_main_t)GAME_ENTRY;
     LOGI("Entering Mainstream main() at %p...", game_main);
