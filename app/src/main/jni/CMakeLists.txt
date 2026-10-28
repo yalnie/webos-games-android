@@ -71,7 +71,7 @@ target_include_directories(mainstream_loader PRIVATE
 target_link_libraries(mainstream_loader
     SDL2
     SDL2_mixer
-    png
+    png_shared
     GLESv2
     EGL
     log
