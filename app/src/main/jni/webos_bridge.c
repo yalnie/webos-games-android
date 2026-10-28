@@ -116,11 +116,92 @@ int NDL_ServiceCall(const char *service, const char *params) {
     return 0;
 }
 
+struct NDL_Response {
+    const char *json_str;
+};
+
+static char s_savedata_buf[65536] = {0};
+static char s_response_json[65536] = {0};
+
 int NDL_ServiceCallWithCallback(const char *service, const char *params, NDL_Callback cb, void *user_data, int async) {
-    LOGI("NDL_ServiceCallWithCallback: %s", service ? service : "");
+    LOGI("NDL_ServiceCallWithCallback: %s, params: %s", service ? service : "", params ? params : "");
+
+    struct NDL_Response resp;
+    resp.json_str = "{\"returnValue\": true}";
+
+    if (service && strstr(service, "com.webos.mediadb")) {
+        if (strstr(service, "find")) {
+            /* Try to read savedata from disk */
+            FILE *f = fopen("save_game.dat", "rb");
+            s_savedata_buf[0] = '\0';
+            if (f) {
+                fseek(f, 0, SEEK_END);
+                long sz = ftell(f);
+                fseek(f, 0, SEEK_SET);
+                if (sz > 0 && sz < (long)sizeof(s_savedata_buf) - 1) {
+                    fread(s_savedata_buf, 1, sz, f);
+                    s_savedata_buf[sz] = '\0';
+                }
+                fclose(f);
+            }
+
+            if (s_savedata_buf[0]) {
+                snprintf(s_response_json, sizeof(s_response_json),
+                         "{\"returnValue\": true, \"results\": [{\"path\": \"mainstream.save_data\", \"content\": \"%s\"}]}",
+                         s_savedata_buf);
+            } else {
+                snprintf(s_response_json, sizeof(s_response_json),
+                         "{\"returnValue\": true, \"results\": []}");
+            }
+            resp.json_str = s_response_json;
+        } else if (strstr(service, "put") || strstr(service, "merge")) {
+            /* Extract content from params and write to disk */
+            if (params) {
+                cJSON *root = cJSON_Parse(params);
+                if (root) {
+                    const char *b64_content = NULL;
+                    /* Check "objects" array (used by put) */
+                    cJSON *objects = cJSON_GetObjectItem(root, "objects");
+                    if (objects && cJSON_GetArraySize(objects) > 0) {
+                        cJSON *obj0 = cJSON_GetArrayItem(objects, 0);
+                        cJSON *content_item = cJSON_GetObjectItem(obj0, "content");
+                        if (content_item && content_item->valuestring) {
+                            b64_content = content_item->valuestring;
+                        }
+                    }
+                    /* Check "props" (used by merge) */
+                    if (!b64_content) {
+                        cJSON *props = cJSON_GetObjectItem(root, "props");
+                        if (props) {
+                            cJSON *content_item = cJSON_GetObjectItem(props, "content");
+                            if (content_item && content_item->valuestring) {
+                                b64_content = content_item->valuestring;
+                            }
+                        }
+                    }
+
+                    if (b64_content) {
+                        strncpy(s_savedata_buf, b64_content, sizeof(s_savedata_buf) - 1);
+                        s_savedata_buf[sizeof(s_savedata_buf) - 1] = '\0';
+                        FILE *f = fopen("save_game.dat", "wb");
+                        if (f) {
+                            fwrite(s_savedata_buf, 1, strlen(s_savedata_buf), f);
+                            fclose(f);
+                            LOGI("Game successfully saved to save_game.dat (%zu bytes)", strlen(s_savedata_buf));
+                        }
+                    }
+                    cJSON_Delete(root);
+                }
+            }
+            resp.json_str = "{\"returnValue\": true}";
+        } else if (strstr(service, "putKind")) {
+            resp.json_str = "{\"returnValue\": true}";
+        }
+    }
+
     if (cb) {
-        /* Invoke callback to unblock callers like SaveData init_putKind_callback */
-        cb(NULL, user_data);
+        LOGI("Invoking NDL callback with json: %s", resp.json_str);
+        cb(&resp, user_data);
     }
     return 0;
 }

@@ -11,8 +11,10 @@
 #include <math.h>
 #include <errno.h>
 #include <android/log.h>
+#include <GLES2/gl2.h>
 
 #include "SDL.h"
+#include "SDL_mixer.h"
 #include "webos_bridge.h"
 
 #define TAG "MainstreamLoader"
@@ -102,6 +104,157 @@ static void override_string_reserve(void *str, size_t n) {
     }
 }
 
+static FILE *override_fopen(const char *filename, const char *mode) {
+    if (!filename) return NULL;
+    FILE *f = fopen(filename, mode);
+    if (!f && strstr(filename, ".wav")) {
+        LOGW("Audio file [%s] not found, falling back to button_press.wav", filename);
+        f = fopen("./snd/button_press.wav", mode);
+        if (!f) f = fopen("snd/button_press.wav", mode);
+    }
+    return f;
+}
+
+static int override_Mix_OpenAudio(int frequency, uint16_t format, int channels, int chunksize) {
+    LOGI("Mix_OpenAudio requested: freq=%d, format=0x%x, channels=%d, chunksize=%d",
+         frequency, format, channels, chunksize);
+    /* Enforce 4096 sample buffer to prevent Android AudioTrack buffer underruns/crackling */
+    if (chunksize < 4096) chunksize = 4096;
+    return Mix_OpenAudio(frequency, format, channels, chunksize);
+}
+
+static int override_SDL_OpenAudio(SDL_AudioSpec *desired, SDL_AudioSpec *obtained) {
+    if (desired) {
+        LOGI("SDL_OpenAudio requested: freq=%d, format=0x%x, channels=%d, samples=%d",
+             desired->freq, desired->format, desired->channels, desired->samples);
+        if (desired->samples < 4096) desired->samples = 4096;
+    }
+    return SDL_OpenAudio(desired, obtained);
+}
+
+static int s_screen_w = 0;
+static int s_screen_h = 0;
+static int s_vp_x = 0;
+static int s_vp_y = 0;
+static int s_vp_w = 0;
+static int s_vp_h = 0;
+
+static void ensure_viewport_metrics(void) {
+    if (s_screen_w <= 0 || s_screen_h <= 0) {
+        SDL_Window *win = SDL_GL_GetCurrentWindow();
+        if (win) {
+            SDL_GL_GetDrawableSize(win, &s_screen_w, &s_screen_h);
+        }
+    }
+    if (s_screen_w > 0 && s_screen_h > 0 && s_vp_w <= 0) {
+        float screen_aspect = (float)s_screen_w / (float)s_screen_h;
+        float target_aspect = 16.0f / 9.0f;
+        if (screen_aspect >= target_aspect) {
+            /* Wider screen (e.g. 20:9 phone): pillarbox left & right */
+            s_vp_h = s_screen_h;
+            s_vp_w = (int)((float)s_screen_h * target_aspect);
+            s_vp_x = (s_screen_w - s_vp_w) / 2;
+            s_vp_y = 0;
+        } else {
+            /* Taller screen: letterbox top & bottom */
+            s_vp_w = s_screen_w;
+            s_vp_h = (int)((float)s_screen_w / target_aspect);
+            s_vp_x = 0;
+            s_vp_y = (s_screen_h - s_vp_h) / 2;
+        }
+        LOGI("Screen resolution: %dx%d -> 16:9 viewport: %dx%d at (%d, %d)",
+             s_screen_w, s_screen_h, s_vp_w, s_vp_h, s_vp_x, s_vp_y);
+    }
+}
+
+static void override_glViewport(GLint x, GLint y, GLsizei width, GLsizei height) {
+    ensure_viewport_metrics();
+    if (s_vp_w > 0 && s_vp_h > 0) {
+        GLint nx = s_vp_x + (GLint)((float)x * s_vp_w / 1920.0f);
+        GLint ny = s_vp_y + (GLint)((float)y * s_vp_h / 1080.0f);
+        GLsizei nw = (GLsizei)((float)width * s_vp_w / 1920.0f);
+        GLsizei nh = (GLsizei)((float)height * s_vp_h / 1080.0f);
+        glViewport(nx, ny, nw, nh);
+    } else {
+        glViewport(x, y, width, height);
+    }
+}
+
+static void override_glScissor(GLint x, GLint y, GLsizei width, GLsizei height) {
+    ensure_viewport_metrics();
+    if (s_vp_w > 0 && s_vp_h > 0) {
+        GLint nx = s_vp_x + (GLint)((float)x * s_vp_w / 1920.0f);
+        GLint ny = s_vp_y + (GLint)((float)y * s_vp_h / 1080.0f);
+        GLsizei nw = (GLsizei)((float)width * s_vp_w / 1920.0f);
+        GLsizei nh = (GLsizei)((float)height * s_vp_h / 1080.0f);
+        glScissor(nx, ny, nw, nh);
+    } else {
+        glScissor(x, y, width, height);
+    }
+}
+
+static void override_SDL_RenderPresent(SDL_Renderer *renderer) {
+    ensure_viewport_metrics();
+    if (s_vp_w > 0 && s_screen_w > s_vp_w) {
+        /* Clear left and right pillarboxes with solid black */
+        glEnable(GL_SCISSOR_TEST);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+
+        /* Left bar */
+        glScissor(0, 0, s_vp_x, s_screen_h);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        /* Right bar */
+        glScissor(s_vp_x + s_vp_w, 0, s_screen_w - (s_vp_x + s_vp_w), s_screen_h);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        glDisable(GL_SCISSOR_TEST);
+    }
+    SDL_RenderPresent(renderer);
+}
+
+static int override_SDL_PollEvent(SDL_Event *event) {
+    int res = SDL_PollEvent(event);
+    if (!res || !event) return res;
+
+    ensure_viewport_metrics();
+
+    /* 1. Scale touch/mouse coordinates from centered 16:9 space to 1920x1080 */
+    if (s_vp_w > 0 && s_vp_h > 0) {
+        if (event->type == SDL_MOUSEMOTION) {
+            float mapped_x = ((float)event->motion.x - (float)s_vp_x) * 1920.0f / (float)s_vp_w;
+            float mapped_y = ((float)event->motion.y - (float)s_vp_y) * 1080.0f / (float)s_vp_h;
+            if (mapped_x < 0.0f) mapped_x = 0.0f;
+            if (mapped_x > 1920.0f) mapped_x = 1920.0f;
+            if (mapped_y < 0.0f) mapped_y = 0.0f;
+            if (mapped_y > 1080.0f) mapped_y = 1080.0f;
+            event->motion.x = (int)mapped_x;
+            event->motion.y = (int)mapped_y;
+        } else if (event->type == SDL_MOUSEBUTTONDOWN || event->type == SDL_MOUSEBUTTONUP) {
+            float mapped_x = ((float)event->button.x - (float)s_vp_x) * 1920.0f / (float)s_vp_w;
+            float mapped_y = ((float)event->button.y - (float)s_vp_y) * 1080.0f / (float)s_vp_h;
+            if (mapped_x < 0.0f) mapped_x = 0.0f;
+            if (mapped_x > 1920.0f) mapped_x = 1920.0f;
+            if (mapped_y < 0.0f) mapped_y = 0.0f;
+            if (mapped_y > 1080.0f) mapped_y = 1080.0f;
+            event->button.x = (int)mapped_x;
+            event->button.y = (int)mapped_y;
+        }
+    }
+
+    /* 2. Map Android Back button to Escape / webOS TV Back */
+    if (event->type == SDL_KEYDOWN || event->type == SDL_KEYUP) {
+        if (event->key.keysym.sym == SDLK_AC_BACK ||
+            event->key.keysym.scancode == SDL_SCANCODE_AC_BACK) {
+            LOGI("Intercepted Back key event, mapping to SDLK_ESCAPE / SDL_SCANCODE_WEBOS_TV_BACK");
+            event->key.keysym.sym = SDLK_ESCAPE;
+            event->key.keysym.scancode = (SDL_Scancode)482; // SDL_SCANCODE_WEBOS_TV_BACK
+        }
+    }
+
+    return res;
+}
+
 static const struct SymbolOverride g_overrides[] = {
     /* NDL */
     { "NDL_ServiceInit", (void *)NDL_ServiceInit },
@@ -145,6 +298,7 @@ static const struct SymbolOverride g_overrides[] = {
     { "json_object_get_type", (void *)json_object_get_type },
 
     /* Libc / Math / C++ overrides */
+    { "fopen", (void *)override_fopen },
     { "ftime", (void *)ftime },
     { "__pthread_key_create", (void *)pthread_key_create },
     { "__isoc99_sscanf", (void *)sscanf },
@@ -153,6 +307,14 @@ static const struct SymbolOverride g_overrides[] = {
     { "__gmon_start__", (void *)dummy_stub },
     { "_ZNSt9basic_iosIcSt11char_traitsIcEE4initEPSt15basic_streambufIcS1_E", (void *)override_basic_ios_init },
     { "_ZNSs7reserveEj", (void *)override_string_reserve },
+
+    /* SDL / Audio / Display overrides */
+    { "Mix_OpenAudio", (void *)override_Mix_OpenAudio },
+    { "SDL_OpenAudio", (void *)override_SDL_OpenAudio },
+    { "glViewport", (void *)override_glViewport },
+    { "glScissor", (void *)override_glScissor },
+    { "SDL_PollEvent", (void *)override_SDL_PollEvent },
+    { "SDL_RenderPresent", (void *)override_SDL_RenderPresent },
 
     { NULL, NULL }
 };
@@ -216,6 +378,9 @@ int SDL_main(int argc, char *argv[]) {
             LOGW("chdir(%s) failed: %s", internal_path, strerror(errno));
         }
     }
+
+    /* Audio hints */
+    SDL_SetHint("SDL_AUDIO_RESAMPLING_MODE", "fast");
 
     /* 2. Open binary */
     FILE *f = fopen("mainstream", "rb");
