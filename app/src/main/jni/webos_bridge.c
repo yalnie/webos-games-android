@@ -120,8 +120,69 @@ struct NDL_Response {
     const char *json_str;
 };
 
-static char s_savedata_buf[65536] = {0};
-static char s_response_json[65536] = {0};
+#define SAVE_STORE_FILE "save_store.json"
+static char s_response_json[262144] = {0};
+
+static cJSON *load_save_store(void) {
+    FILE *f = fopen(SAVE_STORE_FILE, "rb");
+    if (!f) {
+        return cJSON_CreateObject();
+    }
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz <= 0) {
+        fclose(f);
+        return cJSON_CreateObject();
+    }
+    char *buf = (char *)malloc(sz + 1);
+    if (!buf) {
+        fclose(f);
+        return cJSON_CreateObject();
+    }
+    fread(buf, 1, sz, f);
+    buf[sz] = '\0';
+    fclose(f);
+
+    cJSON *root = cJSON_Parse(buf);
+    free(buf);
+    return root ? root : cJSON_CreateObject();
+}
+
+static void persist_save_store(cJSON *root) {
+    if (!root) return;
+    char *printed = cJSON_PrintUnformatted(root);
+    if (printed) {
+        FILE *f = fopen(SAVE_STORE_FILE, "wb");
+        if (f) {
+            fwrite(printed, 1, strlen(printed), f);
+            fclose(f);
+            LOGI("Persisted save store (%zu bytes): %s", strlen(printed), printed);
+        }
+        free(printed);
+    }
+}
+
+static void save_store_set(const char *key, const char *val) {
+    if (!key || !val) return;
+    cJSON *root = load_save_store();
+    cJSON_DeleteItemFromObject(root, key);
+    cJSON_AddStringToObject(root, key, val);
+    persist_save_store(root);
+    cJSON_Delete(root);
+}
+
+static char *save_store_get(const char *key) {
+    if (!key) return NULL;
+    cJSON *root = load_save_store();
+    cJSON *item = cJSON_GetObjectItem(root, key);
+    char *val = NULL;
+    if (item && item->valuestring) {
+        val = strdup(item->valuestring);
+    }
+    cJSON_Delete(root);
+    return val;
+}
 
 int NDL_ServiceCallWithCallback(const char *service, const char *params, NDL_Callback cb, void *user_data, int async) {
     LOGI("NDL_ServiceCallWithCallback: %s, params: %s", service ? service : "", params ? params : "");
@@ -131,67 +192,72 @@ int NDL_ServiceCallWithCallback(const char *service, const char *params, NDL_Cal
 
     if (service && strstr(service, "com.webos.mediadb")) {
         if (strstr(service, "find")) {
-            /* Try to read savedata from disk */
-            FILE *f = fopen("save_game.dat", "rb");
-            s_savedata_buf[0] = '\0';
-            if (f) {
-                fseek(f, 0, SEEK_END);
-                long sz = ftell(f);
-                fseek(f, 0, SEEK_SET);
-                if (sz > 0 && sz < (long)sizeof(s_savedata_buf) - 1) {
-                    fread(s_savedata_buf, 1, sz, f);
-                    s_savedata_buf[sz] = '\0';
+            const char *key = NULL;
+            cJSON *query_root = params ? cJSON_Parse(params) : NULL;
+            if (query_root) {
+                cJSON *query = cJSON_GetObjectItem(query_root, "query");
+                if (query) {
+                    cJSON *where = cJSON_GetObjectItem(query, "where");
+                    if (where && cJSON_GetArraySize(where) > 0) {
+                        cJSON *w0 = cJSON_GetArrayItem(where, 0);
+                        cJSON *val = cJSON_GetObjectItem(w0, "val");
+                        if (val && val->valuestring) {
+                            key = val->valuestring;
+                        }
+                    }
                 }
-                fclose(f);
             }
 
-            if (s_savedata_buf[0]) {
+            char *stored_val = key ? save_store_get(key) : NULL;
+            if (stored_val) {
                 snprintf(s_response_json, sizeof(s_response_json),
-                         "{\"returnValue\": true, \"results\": [{\"path\": \"mainstream.save_data\", \"content\": \"%s\"}]}",
-                         s_savedata_buf);
+                         "{\"returnValue\": true, \"results\": [{\"path\": \"%s\", \"content\": \"%s\"}]}",
+                         key, stored_val);
+                free(stored_val);
             } else {
                 snprintf(s_response_json, sizeof(s_response_json),
                          "{\"returnValue\": true, \"results\": []}");
             }
+            if (query_root) cJSON_Delete(query_root);
             resp.json_str = s_response_json;
-        } else if (strstr(service, "put") || strstr(service, "merge")) {
-            /* Extract content from params and write to disk */
-            if (params) {
-                cJSON *root = cJSON_Parse(params);
-                if (root) {
-                    const char *b64_content = NULL;
-                    /* Check "objects" array (used by put) */
-                    cJSON *objects = cJSON_GetObjectItem(root, "objects");
-                    if (objects && cJSON_GetArraySize(objects) > 0) {
-                        cJSON *obj0 = cJSON_GetArrayItem(objects, 0);
-                        cJSON *content_item = cJSON_GetObjectItem(obj0, "content");
-                        if (content_item && content_item->valuestring) {
-                            b64_content = content_item->valuestring;
-                        }
+        } else if (strstr(service, "put")) {
+            cJSON *root = params ? cJSON_Parse(params) : NULL;
+            if (root) {
+                cJSON *objects = cJSON_GetObjectItem(root, "objects");
+                if (objects && cJSON_GetArraySize(objects) > 0) {
+                    cJSON *obj0 = cJSON_GetArrayItem(objects, 0);
+                    cJSON *path_item = cJSON_GetObjectItem(obj0, "path");
+                    cJSON *content_item = cJSON_GetObjectItem(obj0, "content");
+                    if (path_item && path_item->valuestring && content_item && content_item->valuestring) {
+                        save_store_set(path_item->valuestring, content_item->valuestring);
+                        LOGI("Saved key [%s] -> %zu bytes", path_item->valuestring, strlen(content_item->valuestring));
                     }
-                    /* Check "props" (used by merge) */
-                    if (!b64_content) {
-                        cJSON *props = cJSON_GetObjectItem(root, "props");
-                        if (props) {
-                            cJSON *content_item = cJSON_GetObjectItem(props, "content");
-                            if (content_item && content_item->valuestring) {
-                                b64_content = content_item->valuestring;
-                            }
-                        }
-                    }
-
-                    if (b64_content) {
-                        strncpy(s_savedata_buf, b64_content, sizeof(s_savedata_buf) - 1);
-                        s_savedata_buf[sizeof(s_savedata_buf) - 1] = '\0';
-                        FILE *f = fopen("save_game.dat", "wb");
-                        if (f) {
-                            fwrite(s_savedata_buf, 1, strlen(s_savedata_buf), f);
-                            fclose(f);
-                            LOGI("Game successfully saved to save_game.dat (%zu bytes)", strlen(s_savedata_buf));
-                        }
-                    }
-                    cJSON_Delete(root);
                 }
+                cJSON_Delete(root);
+            }
+            resp.json_str = "{\"returnValue\": true}";
+        } else if (strstr(service, "merge")) {
+            cJSON *root = params ? cJSON_Parse(params) : NULL;
+            if (root) {
+                const char *key = NULL;
+                cJSON *query = cJSON_GetObjectItem(root, "query");
+                if (query) {
+                    cJSON *where = cJSON_GetObjectItem(query, "where");
+                    if (where && cJSON_GetArraySize(where) > 0) {
+                        cJSON *w0 = cJSON_GetArrayItem(where, 0);
+                        cJSON *val = cJSON_GetObjectItem(w0, "val");
+                        if (val && val->valuestring) {
+                            key = val->valuestring;
+                        }
+                    }
+                }
+                cJSON *props = cJSON_GetObjectItem(root, "props");
+                cJSON *content_item = props ? cJSON_GetObjectItem(props, "content") : NULL;
+                if (key && content_item && content_item->valuestring) {
+                    save_store_set(key, content_item->valuestring);
+                    LOGI("Merged key [%s] -> %zu bytes", key, strlen(content_item->valuestring));
+                }
+                cJSON_Delete(root);
             }
             resp.json_str = "{\"returnValue\": true}";
         } else if (strstr(service, "putKind")) {

@@ -6,6 +6,8 @@ import android.util.Log;
 import android.view.View;
 import android.view.WindowManager;
 import android.view.KeyEvent;
+import android.util.DisplayMetrics;
+import android.widget.RelativeLayout;
 
 import org.libsdl.app.SDLActivity;
 
@@ -34,6 +36,28 @@ public class MainActivity extends SDLActivity {
         extractAssetsIfNeeded();
 
         super.onCreate(savedInstanceState);
+
+        // Center 16:9 screen view without black sidebars inside OpenGL (like Superball)
+        DisplayMetrics metrics = getResources().getDisplayMetrics();
+        int screenWidth = metrics.widthPixels;
+        int screenHeight = metrics.heightPixels;
+
+        int targetWidth = screenWidth;
+        int targetHeight = (int) (screenWidth * 9.0f / 16.0f);
+
+        if (targetHeight > screenHeight) {
+            targetHeight = screenHeight;
+            targetWidth = (int) (screenHeight * 16.0f / 9.0f);
+        }
+
+        if (mSurface != null) {
+            RelativeLayout.LayoutParams params = new RelativeLayout.LayoutParams(targetWidth, targetHeight);
+            params.addRule(RelativeLayout.CENTER_IN_PARENT, RelativeLayout.TRUE);
+            mSurface.setLayoutParams(params);
+        }
+        if (mLayout != null) {
+            mLayout.setBackgroundColor(android.graphics.Color.BLACK);
+        }
 
         // Keep screen on while playing
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
