@@ -10,11 +10,12 @@ include(FetchContent)
 set(SDL_SHARED ON CACHE BOOL "Build shared SDL library" FORCE)
 set(SDL_STATIC OFF CACHE BOOL "Build static SDL library" FORCE)
 set(SDL_TEST OFF CACHE BOOL "Build SDL tests" FORCE)
+set(SDL_SENSOR OFF CACHE BOOL "Disable SDL sensor" FORCE)
 
 FetchContent_Declare(
     SDL2
     GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
-    GIT_TAG release-2.28.5
+    GIT_TAG release-2.30.8
     GIT_SHALLOW TRUE
 )
 FetchContent_MakeAvailable(SDL2)
