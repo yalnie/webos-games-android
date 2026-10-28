@@ -154,28 +154,83 @@ static int override_SDL_OpenAudio(SDL_AudioSpec *desired, SDL_AudioSpec *obtaine
 
 static int s_screen_w = 0;
 static int s_screen_h = 0;
+static int s_vp_x = 0;
+static int s_vp_y = 0;
+static int s_vp_w = 0;
+static int s_vp_h = 0;
 
 static void ensure_viewport_metrics(void) {
     if (s_screen_w <= 0 || s_screen_h <= 0) {
         SDL_Window *win = SDL_GL_GetCurrentWindow();
         if (win) {
             SDL_GL_GetDrawableSize(win, &s_screen_w, &s_screen_h);
-            LOGI("Current drawable surface size: %dx%d", s_screen_w, s_screen_h);
         }
+    }
+    if (s_screen_w > 0 && s_screen_h > 0 && s_vp_w <= 0) {
+        float screen_aspect = (float)s_screen_w / (float)s_screen_h;
+        float target_aspect = 16.0f / 9.0f;
+        if (screen_aspect >= target_aspect) {
+            /* Wider screen (e.g. 20:9 phone): pillarbox left & right */
+            s_vp_h = s_screen_h;
+            s_vp_w = (int)((float)s_screen_h * target_aspect);
+            s_vp_x = (s_screen_w - s_vp_w) / 2;
+            s_vp_y = 0;
+        } else {
+            /* Taller screen: letterbox top & bottom */
+            s_vp_w = s_screen_w;
+            s_vp_h = (int)((float)s_screen_w / target_aspect);
+            s_vp_x = 0;
+            s_vp_y = (s_screen_h - s_vp_h) / 2;
+        }
+        LOGI("Screen resolution: %dx%d -> 16:9 viewport: %dx%d at (%d, %d)",
+             s_screen_w, s_screen_h, s_vp_w, s_vp_h, s_vp_x, s_vp_y);
     }
 }
 
 static void override_glViewport(GLint x, GLint y, GLsizei width, GLsizei height) {
     ensure_viewport_metrics();
-    if (s_screen_w > 0 && s_screen_h > 0) {
-        GLint nx = (GLint)((float)x * (float)s_screen_w / 1920.0f);
-        GLint ny = (GLint)((float)y * (float)s_screen_h / 1080.0f);
-        GLsizei nw = (GLsizei)((float)width * (float)s_screen_w / 1920.0f);
-        GLsizei nh = (GLsizei)((float)height * (float)s_screen_h / 1080.0f);
+    if (s_vp_w > 0 && s_vp_h > 0) {
+        GLint nx = s_vp_x + (GLint)((float)x * s_vp_w / 1920.0f);
+        GLint ny = s_vp_y + (GLint)((float)y * s_vp_h / 1080.0f);
+        GLsizei nw = (GLsizei)((float)width * s_vp_w / 1920.0f);
+        GLsizei nh = (GLsizei)((float)height * s_vp_h / 1080.0f);
         glViewport(nx, ny, nw, nh);
     } else {
         glViewport(x, y, width, height);
     }
+}
+
+static void override_glScissor(GLint x, GLint y, GLsizei width, GLsizei height) {
+    ensure_viewport_metrics();
+    if (s_vp_w > 0 && s_vp_h > 0) {
+        GLint nx = s_vp_x + (GLint)((float)x * s_vp_w / 1920.0f);
+        GLint ny = s_vp_y + (GLint)((float)y * s_vp_h / 1080.0f);
+        GLsizei nw = (GLsizei)((float)width * s_vp_w / 1920.0f);
+        GLsizei nh = (GLsizei)((float)height * s_vp_h / 1080.0f);
+        glScissor(nx, ny, nw, nh);
+    } else {
+        glScissor(x, y, width, height);
+    }
+}
+
+static void override_SDL_RenderPresent(SDL_Renderer *renderer) {
+    ensure_viewport_metrics();
+    if (s_vp_w > 0 && s_screen_w > s_vp_w) {
+        /* Clear left and right pillarboxes with solid black */
+        glEnable(GL_SCISSOR_TEST);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+
+        /* Left bar */
+        glScissor(0, 0, s_vp_x, s_screen_h);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        /* Right bar */
+        glScissor(s_vp_x + s_vp_w, 0, s_screen_w - (s_vp_x + s_vp_w), s_screen_h);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        glDisable(GL_SCISSOR_TEST);
+    }
+    SDL_RenderPresent(renderer);
 }
 
 /* WebOS 2.0.3 SDL_KeyboardEvent layout as expected by mainstream binary */
@@ -200,11 +255,11 @@ static int override_SDL_PollEvent(SDL_Event *event) {
 
     ensure_viewport_metrics();
 
-    /* 1. Scale touch/mouse coordinates from drawable space to 1920x1080 */
-    if (s_screen_w > 0 && s_screen_h > 0) {
+    /* 1. Scale touch/mouse coordinates from centered 16:9 space to 1920x1080 */
+    if (s_vp_w > 0 && s_vp_h > 0) {
         if (event->type == SDL_MOUSEMOTION) {
-            float mapped_x = (float)event->motion.x * 1920.0f / (float)s_screen_w;
-            float mapped_y = (float)event->motion.y * 1080.0f / (float)s_screen_h;
+            float mapped_x = ((float)event->motion.x - (float)s_vp_x) * 1920.0f / (float)s_vp_w;
+            float mapped_y = ((float)event->motion.y - (float)s_vp_y) * 1080.0f / (float)s_vp_h;
             if (mapped_x < 0.0f) mapped_x = 0.0f;
             if (mapped_x > 1920.0f) mapped_x = 1920.0f;
             if (mapped_y < 0.0f) mapped_y = 0.0f;
@@ -212,8 +267,8 @@ static int override_SDL_PollEvent(SDL_Event *event) {
             event->motion.x = (int)mapped_x;
             event->motion.y = (int)mapped_y;
         } else if (event->type == SDL_MOUSEBUTTONDOWN || event->type == SDL_MOUSEBUTTONUP) {
-            float mapped_x = (float)event->button.x * 1920.0f / (float)s_screen_w;
-            float mapped_y = (float)event->button.y * 1080.0f / (float)s_screen_h;
+            float mapped_x = ((float)event->button.x - (float)s_vp_x) * 1920.0f / (float)s_vp_w;
+            float mapped_y = ((float)event->button.y - (float)s_vp_y) * 1080.0f / (float)s_vp_h;
             if (mapped_x < 0.0f) mapped_x = 0.0f;
             if (mapped_x > 1920.0f) mapped_x = 1920.0f;
             if (mapped_y < 0.0f) mapped_y = 0.0f;
@@ -326,7 +381,9 @@ static const struct SymbolOverride g_overrides[] = {
     { "Mix_OpenAudio", (void *)override_Mix_OpenAudio },
     { "SDL_OpenAudio", (void *)override_SDL_OpenAudio },
     { "glViewport", (void *)override_glViewport },
+    { "glScissor", (void *)override_glScissor },
     { "SDL_PollEvent", (void *)override_SDL_PollEvent },
+    { "SDL_RenderPresent", (void *)override_SDL_RenderPresent },
 
     { NULL, NULL }
 };
