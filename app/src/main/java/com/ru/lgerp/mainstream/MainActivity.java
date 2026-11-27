@@ -128,7 +128,7 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
     }
 
     public static int ndlMediaLoad(String rawPath) {
-        if (rawPath == null || rawPath.isEmpty()) return 0;
+        if (rawPath == null || rawPath.isEmpty()) return -1;
         String p = rawPath;
         if (p.startsWith("file://")) p = p.substring(7);
         File f = new File(p);
@@ -149,7 +149,7 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
         }
         if (!f.exists()) {
             Log.w(TAG, "ndlMediaLoad: file not found: " + rawPath + " (tried " + f.getAbsolutePath() + ")");
-            return 1;
+            return 0;
         }
         try {
             ndlMediaUnload();
@@ -160,10 +160,10 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
             mp.start();
             ndlMediaPlayer = mp;
             Log.i(TAG, "ndlMediaLoad playing: " + f.getAbsolutePath());
-            return 1;
+            return 0;
         } catch (Exception e) {
             Log.e(TAG, "ndlMediaLoad error", e);
-            return 1;
+            return 0;
         }
     }
 

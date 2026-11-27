@@ -235,6 +235,65 @@ static void *override_string_append_str(void *str, const void *other) {
     return s_real_string_append_str ? s_real_string_append_str(str, other) : str;
 }
 
+typedef void *(*real_string_cstr_t)(void *str, const char *s);
+static real_string_cstr_t s_real_string_assign_cstr0 = NULL;
+static void *override_string_assign_cstr0(void *str, const char *s) {
+    fix_empty_rep(str);
+    if (!s_real_string_assign_cstr0 && g_libstdcpp) {
+        s_real_string_assign_cstr0 = (real_string_cstr_t)dlsym(g_libstdcpp, "_ZNSs6assignEPKc");
+    }
+    return s_real_string_assign_cstr0 ? s_real_string_assign_cstr0(str, s) : str;
+}
+
+static real_string_cstr_t s_real_string_append_cstr0 = NULL;
+static void *override_string_append_cstr0(void *str, const char *s) {
+    fix_empty_rep(str);
+    if (!s_real_string_append_cstr0 && g_libstdcpp) {
+        s_real_string_append_cstr0 = (real_string_cstr_t)dlsym(g_libstdcpp, "_ZNSs6appendEPKc");
+    }
+    return s_real_string_append_cstr0 ? s_real_string_append_cstr0(str, s) : str;
+}
+
+static real_string_cstr_t s_real_string_op_assign_cstr = NULL;
+static void *override_string_op_assign_cstr(void *str, const char *s) {
+    fix_empty_rep(str);
+    if (!s_real_string_op_assign_cstr && g_libstdcpp) {
+        s_real_string_op_assign_cstr = (real_string_cstr_t)dlsym(g_libstdcpp, "_ZNSsaSEPKc");
+    }
+    return s_real_string_op_assign_cstr ? s_real_string_op_assign_cstr(str, s) : str;
+}
+
+static real_string_assign_str_t s_real_string_op_assign_str = NULL;
+static void *override_string_op_assign_str(void *str, const void *other) {
+    fix_empty_rep(str);
+    if (!s_real_string_op_assign_str && g_libstdcpp) {
+        s_real_string_op_assign_str = (real_string_assign_str_t)dlsym(g_libstdcpp, "_ZNSsaSERKSs");
+    }
+    return s_real_string_op_assign_str ? s_real_string_op_assign_str(str, other) : str;
+}
+
+typedef void *(*real_string_replace_t)(void *str, size_t pos, size_t n1, const char *s, size_t n2);
+static real_string_replace_t s_real_string_replace = NULL;
+static void *override_string_replace(void *str, size_t pos, size_t n1, const char *s, size_t n2) {
+    fix_empty_rep(str);
+    if (!s_real_string_replace && g_libstdcpp) {
+        s_real_string_replace = (real_string_replace_t)dlsym(g_libstdcpp, "_ZNSs7replaceEjjPKcj");
+    }
+    return s_real_string_replace ? s_real_string_replace(str, pos, n1, s, n2) : str;
+}
+
+typedef void (*real_string_leak_hard_t)(void *str);
+static real_string_leak_hard_t s_real_string_leak_hard = NULL;
+static void override_string_leak_hard(void *str) {
+    fix_empty_rep(str);
+    if (!s_real_string_leak_hard && g_libstdcpp) {
+        s_real_string_leak_hard = (real_string_leak_hard_t)dlsym(g_libstdcpp, "_ZNSs12_M_leak_hardEv");
+    }
+    if (s_real_string_leak_hard) {
+        s_real_string_leak_hard(str);
+    }
+}
+
 typedef void (*real_basic_ios_init_t)(void *ios, void *sb);
 static real_basic_ios_init_t s_real_basic_ios_init = NULL;
 
@@ -541,6 +600,32 @@ static const struct SymbolOverride g_overrides[] = {
     { "LGNC_SYSTEM_Finalize", (void *)LGNC_SYSTEM_Finalize },
     { "LGNC_SYSTEM_GetLanguage", (void *)LGNC_SYSTEM_GetLanguage },
     { "LGNC_SYSTEM_GetSaveDirectory", (void *)LGNC_SYSTEM_GetSaveDirectory },
+    { "LGNC_SYSTEM_SetResolution", (void *)LGNC_SYSTEM_SetResolution },
+    { "LGNC_SYSTEM_GetDisplayId", (void *)LGNC_SYSTEM_GetDisplayId },
+    { "LGNC_SYSTEM_SetCursorShape", (void *)LGNC_SYSTEM_SetCursorShape },
+    { "LGNC_SYSTEM_SetCustomCursor", (void *)LGNC_SYSTEM_SetCustomCursor },
+    { "LGNC_S3D_GetGraphicMode", (void *)LGNC_S3D_GetGraphicMode },
+    { "LGNC_S3D_SetAllMode", (void *)LGNC_S3D_SetAllMode },
+    { "LGNC_MEDIA_Initialize", (void *)LGNC_MEDIA_Initialize },
+    { "LGNC_MEDIA_Finalize", (void *)LGNC_MEDIA_Finalize },
+    { "LGNC_MEDIA_PlayFile", (void *)LGNC_MEDIA_PlayFile },
+    { "LGNC_MEDIA_PlayBuffer", (void *)LGNC_MEDIA_PlayBuffer },
+    { "LGNC_MEDIA_Stop", (void *)LGNC_MEDIA_Stop },
+    { "LGNC_eglGetDisplay", (void *)LGNC_eglGetDisplay },
+    { "LGNC_eglInitialize", (void *)LGNC_eglInitialize },
+    { "LGNC_eglGetConfigs", (void *)LGNC_eglGetConfigs },
+    { "LGNC_eglChooseConfig", (void *)LGNC_eglChooseConfig },
+    { "LGNC_eglGetConfigAttrib", (void *)LGNC_eglGetConfigAttrib },
+    { "LGNC_eglCreateWindowSurface", (void *)LGNC_eglCreateWindowSurface },
+    { "LGNC_eglCreateContext", (void *)LGNC_eglCreateContext },
+    { "LGNC_eglMakeCurrent", (void *)LGNC_eglMakeCurrent },
+    { "LGNC_eglQuerySurface", (void *)LGNC_eglQuerySurface },
+    { "LGNC_eglSwapBuffers", (void *)LGNC_eglSwapBuffers },
+    { "LGNC_eglSwapInterval", (void *)LGNC_eglSwapInterval },
+    { "LGNC_eglDestroySurface", (void *)LGNC_eglDestroySurface },
+    { "LGNC_eglDestroyContext", (void *)LGNC_eglDestroyContext },
+    { "LGNC_eglTerminate", (void *)LGNC_eglTerminate },
+    { "LGNC_eglGetError", (void *)LGNC_eglGetError },
 
     /* GLib Base64 */
     { "g_base64_encode", (void *)g_base64_encode },
@@ -596,9 +681,15 @@ static const struct SymbolOverride g_overrides[] = {
     { "_ZNSs7reserveEj", (void *)override_string_reserve },
     { "_ZNSs9_M_mutateEjjj", (void *)override_string_mutate },
     { "_ZNSs6assignEPKcj", (void *)override_string_assign_cstr },
+    { "_ZNSs6assignEPKc", (void *)override_string_assign_cstr0 },
     { "_ZNSs6assignERKSs", (void *)override_string_assign_str },
     { "_ZNSs6appendEPKcj", (void *)override_string_append_cstr },
+    { "_ZNSs6appendEPKc", (void *)override_string_append_cstr0 },
     { "_ZNSs6appendERKSs", (void *)override_string_append_str },
+    { "_ZNSsaSEPKc", (void *)override_string_op_assign_cstr },
+    { "_ZNSsaSERKSs", (void *)override_string_op_assign_str },
+    { "_ZNSs7replaceEjjPKcj", (void *)override_string_replace },
+    { "_ZNSs12_M_leak_hardEv", (void *)override_string_leak_hard },
     { "_ZNSs4_Rep10_M_disposeERKSaIcE", (void *)override_string_rep_dispose },
     { "_ZNSs4_Rep10_M_destroyERKSaIcE", (void *)override_string_rep_destroy },
 
@@ -809,7 +900,7 @@ int SDL_main(int argc, char *argv[]) {
             const char *sym_name = dynstr + dynsym[sym_idx].st_name;
             void *resolved = resolve_symbol(sym_name);
             if (r_type == R_ARM_JUMP_SLOT) {
-                *(uintptr_t *)r_offset = (uintptr_t)resolved;
+                *(uintptr_t *)r_offset = resolved ? (uintptr_t)resolved : (uintptr_t)dummy_stub;
             }
         }
     }
@@ -848,6 +939,7 @@ int SDL_main(int argc, char *argv[]) {
                 fclose(f);
                 return 1;
             }
+            __builtin___clear_cache((char *)seg_start, (char *)seg_end);
         }
     }
 
