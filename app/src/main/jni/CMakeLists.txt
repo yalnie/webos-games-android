@@ -11,6 +11,8 @@ set(SDL_SHARED ON CACHE BOOL "Build shared SDL library" FORCE)
 set(SDL_STATIC OFF CACHE BOOL "Build static SDL library" FORCE)
 set(SDL_TEST OFF CACHE BOOL "Build SDL tests" FORCE)
 set(SDL_SENSOR OFF CACHE BOOL "Disable SDL sensor" FORCE)
+set(SDL_AAUDIO OFF CACHE BOOL "Disable AAudio to avoid Samsung/Snapdragon MMAP crackling" FORCE)
+set(SDL_OPENSLES OFF CACHE BOOL "Disable OpenSLES to use AudioTrack" FORCE)
 
 FetchContent_Declare(
     SDL2

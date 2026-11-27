@@ -436,6 +436,9 @@ int SDL_main(int argc, char *argv[]) {
         }
     }
 
+    /* Force Android AudioTrack driver (avoids AAudio MMAP/low-latency crackling) */
+    SDL_SetHint("SDL_AUDIODRIVER", "android");
+
     /* 2. Open binary */
     FILE *f = fopen("mainstream", "rb");
     if (!f) {
