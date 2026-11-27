@@ -62,6 +62,8 @@ JNIEXPORT void JNICALL Java_com_ru_lgerp_mainstream_MainActivity_nativeUpdateSen
 static FILE *g_stderr_ptr = NULL;
 static FILE *g_stdout_ptr = NULL;
 static void *g_libstdcpp = NULL;
+static void *g_libstdcpp_empty_rep = NULL;
+static void *g_app_empty_rep = NULL;
 
 /* Custom symbol resolution table */
 struct SymbolOverride {
@@ -81,6 +83,30 @@ static int stub_isnan(double x) {
 static void stub_sincosf(float x, float *s, float *c) {
     if (s) *s = sinf(x);
     if (c) *c = cosf(x);
+}
+
+static void stub_sincos(double x, double *s, double *c) {
+    if (s) *s = sin(x);
+    if (c) *c = cos(x);
+}
+
+static int *override_errno_location(void) {
+    return &errno;
+}
+
+typedef void (*real_string_rep_destroy_t)(void *rep, void *alloc);
+static real_string_rep_destroy_t s_real_string_rep_destroy = NULL;
+
+static void override_string_rep_destroy(void *rep, void *alloc) {
+    if (!rep || rep == g_libstdcpp_empty_rep || rep == g_app_empty_rep) {
+        return;
+    }
+    if (!s_real_string_rep_destroy && g_libstdcpp) {
+        s_real_string_rep_destroy = (real_string_rep_destroy_t)dlsym(g_libstdcpp, "_ZNSs4_Rep10_M_destroyERKSaIcE");
+    }
+    if (s_real_string_rep_destroy) {
+        s_real_string_rep_destroy(rep, alloc);
+    }
 }
 
 typedef void (*real_basic_ios_init_t)(void *ios, void *sb);
@@ -422,16 +448,25 @@ static const struct SymbolOverride g_overrides[] = {
     /* Libc / Math / C++ overrides */
     { "fopen", (void *)override_fopen },
     { "ftime", (void *)ftime },
+    { "__errno_location", (void *)override_errno_location },
     { "__strdup", (void *)strdup },
     { "__xstat", (void *)override_xstat },
     { "__libc_start_main", (void *)override_libc_start_main },
     { "__pthread_key_create", (void *)pthread_key_create },
+    { "pthread_setcancelstate", (void *)dummy_stub },
+    { "pthread_setcanceltype", (void *)dummy_stub },
+    { "pthread_cancel", (void *)dummy_stub },
     { "__isoc99_sscanf", (void *)sscanf },
     { "__isnan", (void *)stub_isnan },
     { "sincosf", (void *)stub_sincosf },
-    { "__gmon_start__", (void *)dummy_stub },
+    { "sincos", (void *)stub_sincos },
+    { "__gmon_start__", NULL },
+    { "_Jv_RegisterClasses", NULL },
+    { "_ITM_deregisterTMCloneTable", NULL },
+    { "_ITM_registerTMCloneTable", NULL },
     { "_ZNSt9basic_iosIcSt11char_traitsIcEE4initEPSt15basic_streambufIcS1_E", (void *)override_basic_ios_init },
     { "_ZNSs7reserveEj", (void *)override_string_reserve },
+    { "_ZNSs4_Rep10_M_destroyERKSaIcE", (void *)override_string_rep_destroy },
 
     /* SDL / Display overrides */
     { "glViewport", (void *)override_glViewport },
@@ -524,6 +559,7 @@ int SDL_main(int argc, char *argv[]) {
     g_libstdcpp = dlopen("libgnustl_shared.so", RTLD_GLOBAL | RTLD_NOW);
     if (g_libstdcpp) {
         LOGI("Successfully loaded GNU STL (libgnustl_shared.so)");
+        g_libstdcpp_empty_rep = dlsym(g_libstdcpp, "_ZNSs4_Rep20_S_empty_rep_storageE");
     } else {
         LOGW("Could not load libgnustl_shared.so: %s", dlerror());
     }
@@ -657,6 +693,9 @@ int SDL_main(int argc, char *argv[]) {
             if (r_type == R_ARM_GLOB_DAT) {
                 *(uintptr_t *)r_offset = (uintptr_t)resolved;
             } else if (r_type == R_ARM_COPY) {
+                if (strstr(sym_name, "_ZNSs4_Rep20_S_empty_rep_storageE")) {
+                    g_app_empty_rep = (void *)r_offset;
+                }
                 if (resolved && resolved != (void *)dummy_stub && dynsym[sym_idx].st_size > 0) {
                     memcpy((void *)r_offset, resolved, dynsym[sym_idx].st_size);
                 }
