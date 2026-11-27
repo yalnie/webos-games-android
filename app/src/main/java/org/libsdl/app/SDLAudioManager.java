@@ -250,7 +250,7 @@ public class SDLAudioManager {
 
         } else {
             if (mAudioTrack == null) {
-                int trackBufferSize = Math.max(desiredFrames * frameSize * 4, minBufferSize * 4);
+                int trackBufferSize = Math.max(desiredFrames * frameSize * 2, minBufferSize * 2);
                 mAudioTrack = new AudioTrack(AudioManager.STREAM_MUSIC, sampleRate, channelConfig, audioFormat, trackBufferSize, AudioTrack.MODE_STREAM);
 
                 // Instantiating AudioTrack can "succeed" without an exception and the track may still be invalid
