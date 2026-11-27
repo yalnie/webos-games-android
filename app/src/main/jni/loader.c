@@ -94,8 +94,18 @@ static int *override_errno_location(void) {
     return &errno;
 }
 
+static void fix_empty_rep(void *str) {
+    if (str && g_app_empty_rep && g_libstdcpp_empty_rep) {
+        char *p = *(char **)str;
+        if (p == (char *)g_app_empty_rep + 12) {
+            *(char **)str = (char *)g_libstdcpp_empty_rep + 12;
+        }
+    }
+}
+
 typedef void (*real_string_rep_destroy_t)(void *rep, void *alloc);
 static real_string_rep_destroy_t s_real_string_rep_destroy = NULL;
+static real_string_rep_destroy_t s_real_string_rep_dispose = NULL;
 
 static void override_string_rep_destroy(void *rep, void *alloc) {
     if (!rep || rep == g_libstdcpp_empty_rep || rep == g_app_empty_rep) {
@@ -107,6 +117,70 @@ static void override_string_rep_destroy(void *rep, void *alloc) {
     if (s_real_string_rep_destroy) {
         s_real_string_rep_destroy(rep, alloc);
     }
+}
+
+static void override_string_rep_dispose(void *rep, void *alloc) {
+    if (!rep || rep == g_libstdcpp_empty_rep || rep == g_app_empty_rep) {
+        return;
+    }
+    if (!s_real_string_rep_dispose && g_libstdcpp) {
+        s_real_string_rep_dispose = (real_string_rep_destroy_t)dlsym(g_libstdcpp, "_ZNSs4_Rep10_M_disposeERKSaIcE");
+    }
+    if (s_real_string_rep_dispose) {
+        s_real_string_rep_dispose(rep, alloc);
+    }
+}
+
+typedef void (*real_string_mutate_t)(void *str, size_t pos, size_t len1, size_t len2);
+static real_string_mutate_t s_real_string_mutate = NULL;
+static void override_string_mutate(void *str, size_t pos, size_t len1, size_t len2) {
+    fix_empty_rep(str);
+    if (!s_real_string_mutate && g_libstdcpp) {
+        s_real_string_mutate = (real_string_mutate_t)dlsym(g_libstdcpp, "_ZNSs9_M_mutateEjjj");
+    }
+    if (s_real_string_mutate) {
+        s_real_string_mutate(str, pos, len1, len2);
+    }
+}
+
+typedef void *(*real_string_assign_cstr_t)(void *str, const char *s, size_t n);
+static real_string_assign_cstr_t s_real_string_assign_cstr = NULL;
+static void *override_string_assign_cstr(void *str, const char *s, size_t n) {
+    fix_empty_rep(str);
+    if (!s_real_string_assign_cstr && g_libstdcpp) {
+        s_real_string_assign_cstr = (real_string_assign_cstr_t)dlsym(g_libstdcpp, "_ZNSs6assignEPKcj");
+    }
+    return s_real_string_assign_cstr ? s_real_string_assign_cstr(str, s, n) : str;
+}
+
+typedef void *(*real_string_assign_str_t)(void *str, const void *other);
+static real_string_assign_str_t s_real_string_assign_str = NULL;
+static void *override_string_assign_str(void *str, const void *other) {
+    fix_empty_rep(str);
+    if (!s_real_string_assign_str && g_libstdcpp) {
+        s_real_string_assign_str = (real_string_assign_str_t)dlsym(g_libstdcpp, "_ZNSs6assignERKSs");
+    }
+    return s_real_string_assign_str ? s_real_string_assign_str(str, other) : str;
+}
+
+typedef void *(*real_string_append_cstr_t)(void *str, const char *s, size_t n);
+static real_string_append_cstr_t s_real_string_append_cstr = NULL;
+static void *override_string_append_cstr(void *str, const char *s, size_t n) {
+    fix_empty_rep(str);
+    if (!s_real_string_append_cstr && g_libstdcpp) {
+        s_real_string_append_cstr = (real_string_append_cstr_t)dlsym(g_libstdcpp, "_ZNSs6appendEPKcj");
+    }
+    return s_real_string_append_cstr ? s_real_string_append_cstr(str, s, n) : str;
+}
+
+typedef void *(*real_string_append_str_t)(void *str, const void *other);
+static real_string_append_str_t s_real_string_append_str = NULL;
+static void *override_string_append_str(void *str, const void *other) {
+    fix_empty_rep(str);
+    if (!s_real_string_append_str && g_libstdcpp) {
+        s_real_string_append_str = (real_string_append_str_t)dlsym(g_libstdcpp, "_ZNSs6appendERKSs");
+    }
+    return s_real_string_append_str ? s_real_string_append_str(str, other) : str;
 }
 
 typedef void (*real_basic_ios_init_t)(void *ios, void *sb);
@@ -143,6 +217,7 @@ static void override_string_reserve(void *str, size_t n) {
         LOGW("Intercepted invalid std::string::reserve(%zu), clamping to 0", n);
         return;
     }
+    fix_empty_rep(str);
     if (!s_real_string_reserve && g_libstdcpp) {
         s_real_string_reserve = (real_string_reserve_t)dlsym(g_libstdcpp, "_ZNSs7reserveEj");
     }
@@ -466,6 +541,12 @@ static const struct SymbolOverride g_overrides[] = {
     { "_ITM_registerTMCloneTable", NULL },
     { "_ZNSt9basic_iosIcSt11char_traitsIcEE4initEPSt15basic_streambufIcS1_E", (void *)override_basic_ios_init },
     { "_ZNSs7reserveEj", (void *)override_string_reserve },
+    { "_ZNSs9_M_mutateEjjj", (void *)override_string_mutate },
+    { "_ZNSs6assignEPKcj", (void *)override_string_assign_cstr },
+    { "_ZNSs6assignERKSs", (void *)override_string_assign_str },
+    { "_ZNSs6appendEPKcj", (void *)override_string_append_cstr },
+    { "_ZNSs6appendERKSs", (void *)override_string_append_str },
+    { "_ZNSs4_Rep10_M_disposeERKSaIcE", (void *)override_string_rep_dispose },
     { "_ZNSs4_Rep10_M_destroyERKSaIcE", (void *)override_string_rep_destroy },
 
     /* SDL / Display overrides */

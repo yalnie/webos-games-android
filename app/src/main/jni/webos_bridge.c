@@ -1,5 +1,7 @@
 #include "webos_bridge.h"
 #include "cJSON.h"
+#include "SDL.h"
+#include "SDL_mixer.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -314,14 +316,108 @@ int NDL_UnregisterServiceCallback(NDL_Callback cb) {
     return 0;
 }
 
-/* NDL Media */
-int NDL_MediaInit(const char *appId) { return 0; }
-int NDL_MediaQuit(void) { return 0; }
-int NDL_MediaLoad(const char *mediaInfo, void *cb) { return 0; }
-int NDL_MediaUnload(void) { return 0; }
-int NDL_MediaPlay(void) { return 0; }
-int NDL_MediaPause(void) { return 0; }
-int NDL_MediaSeekTo(int posMs) { return 0; }
+/* NDL Media (backed by SDL2_mixer for ColorBridge / CutterPillars / etc.) */
+static Mix_Music *s_ndl_music = NULL;
+
+static void ensure_mixer_open(void) {
+    int freq = 0, chans = 0;
+    uint16_t fmt = 0;
+    if (Mix_QuerySpec(&freq, &fmt, &chans) == 0) {
+        Mix_Init(MIX_INIT_MP3);
+        Mix_OpenAudio(44100, AUDIO_S16LSB, 2, 2048);
+    }
+}
+
+int NDL_MediaInit(const char *appId) {
+    ensure_mixer_open();
+    return 0;
+}
+
+int NDL_MediaQuit(void) {
+    if (s_ndl_music) {
+        Mix_HaltMusic();
+        Mix_FreeMusic(s_ndl_music);
+        s_ndl_music = NULL;
+    }
+    return 0;
+}
+
+int NDL_MediaLoad(const char *mediaInfo, void *cb) {
+    if (!mediaInfo) return 0;
+    ensure_mixer_open();
+
+    char path_buf[512] = {0};
+    if (mediaInfo[0] == '{') {
+        cJSON *root = cJSON_Parse(mediaInfo);
+        if (root) {
+            cJSON *src = cJSON_GetObjectItem(root, "source");
+            if (!src) src = cJSON_GetObjectItem(root, "uri");
+            if (src && src->valuestring) {
+                strncpy(path_buf, src->valuestring, sizeof(path_buf) - 1);
+            }
+            cJSON_Delete(root);
+        }
+    } else {
+        strncpy(path_buf, mediaInfo, sizeof(path_buf) - 1);
+    }
+
+    const char *p = path_buf;
+    if (strncmp(p, "file://", 7) == 0) p += 7;
+    while (*p == '/') p++;
+
+    if (s_ndl_music) {
+        Mix_HaltMusic();
+        Mix_FreeMusic(s_ndl_music);
+        s_ndl_music = NULL;
+    }
+
+    if (*p) {
+        s_ndl_music = Mix_LoadMUS(p);
+        if (s_ndl_music) {
+            Mix_PlayMusic(s_ndl_music, -1);
+            LOGI("NDL_MediaLoad playing [%s]", p);
+            return 1;
+        }
+        LOGW("NDL_MediaLoad failed to load [%s]: %s", p, Mix_GetError());
+    }
+    return 1;
+}
+
+int NDL_MediaUnload(void) {
+    if (s_ndl_music) {
+        Mix_HaltMusic();
+        Mix_FreeMusic(s_ndl_music);
+        s_ndl_music = NULL;
+    }
+    return 0;
+}
+
+int NDL_MediaPlay(void) {
+    if (s_ndl_music) {
+        if (Mix_PausedMusic()) {
+            Mix_ResumeMusic();
+        } else if (!Mix_PlayingMusic()) {
+            Mix_PlayMusic(s_ndl_music, -1);
+        }
+    }
+    return 0;
+}
+
+int NDL_MediaPause(void) {
+    if (s_ndl_music && Mix_PlayingMusic()) {
+        Mix_PauseMusic();
+    }
+    return 0;
+}
+
+int NDL_MediaSeekTo(int posMs) {
+    if (s_ndl_music) {
+        Mix_RewindMusic();
+        if (posMs > 0) Mix_SetMusicPosition((double)posMs / 1000.0);
+    }
+    return 0;
+}
+
 int NDL_MediaSubscribeEvents(void *cb, void *userData) { return 0; }
 const char *NDL_MediaGetError(void) { return ""; }
 
