@@ -7,6 +7,7 @@
 #include <sys/mman.h>
 #include <dlfcn.h>
 #include <elf.h>
+#include <link.h>
 #include <pthread.h>
 #include <math.h>
 #include <errno.h>
@@ -70,6 +71,57 @@ struct SymbolOverride {
     const char *name;
     void *func;
 };
+
+static void safe_free(void *ptr) {
+    if (!ptr) return;
+    /* Never free static ELF .bss/.data pointers (e.g. R_ARM_COPY _S_empty_rep_storage) */
+    if ((uintptr_t)ptr < 0x02000000) return;
+    if (g_app_empty_rep && ptr == g_app_empty_rep) return;
+    if (g_libstdcpp_empty_rep && ptr == g_libstdcpp_empty_rep) return;
+    free(ptr);
+}
+
+static int patch_gnustl_cb(struct dl_phdr_info *info, size_t size, void *data) {
+    if (!info->dlpi_name || !strstr(info->dlpi_name, "libgnustl_shared.so")) return 0;
+    uintptr_t base = info->dlpi_addr;
+    Elf32_Dyn *dyn = NULL;
+    for (int i = 0; i < info->dlpi_phnum; i++) {
+        if (info->dlpi_phdr[i].p_type == PT_DYNAMIC) {
+            dyn = (Elf32_Dyn *)(base + info->dlpi_phdr[i].p_vaddr);
+            break;
+        }
+    }
+    if (!dyn) return 0;
+
+    Elf32_Sym *symtab = NULL;
+    const char *strtab = NULL;
+    Elf32_Rel *jmprel = NULL;
+    size_t pltrelsz = 0;
+    for (; dyn->d_tag != DT_NULL; dyn++) {
+        switch (dyn->d_tag) {
+            case DT_SYMTAB: symtab = (Elf32_Sym *)(base + dyn->d_un.d_ptr); break;
+            case DT_STRTAB: strtab = (const char *)(base + dyn->d_un.d_ptr); break;
+            case DT_JMPREL: jmprel = (Elf32_Rel *)(base + dyn->d_un.d_ptr); break;
+            case DT_PLTRELSZ: pltrelsz = dyn->d_un.d_val; break;
+            default: break;
+        }
+    }
+    if (!symtab || !strtab || !jmprel) return 0;
+
+    size_t count = pltrelsz / sizeof(Elf32_Rel);
+    for (size_t i = 0; i < count; i++) {
+        uint32_t sym_idx = ELF32_R_SYM(jmprel[i].r_info);
+        const char *name = strtab + symtab[sym_idx].st_name;
+        if (strcmp(name, "free") == 0) {
+            uintptr_t *got_entry = (uintptr_t *)(base + jmprel[i].r_offset);
+            uintptr_t page = ((uintptr_t)got_entry) & ~0xFFFU;
+            mprotect((void *)page, 4096, PROT_READ | PROT_WRITE);
+            *got_entry = (uintptr_t)safe_free;
+            LOGI("Patched libgnustl_shared.so free@GOT (%p) -> safe_free", got_entry);
+        }
+    }
+    return 1;
+}
 
 static void *dummy_stub(void) {
     LOGW("Called unhandled stub!");
@@ -522,6 +574,7 @@ static const struct SymbolOverride g_overrides[] = {
 
     /* Libc / Math / C++ overrides */
     { "fopen", (void *)override_fopen },
+    { "free", (void *)safe_free },
     { "ftime", (void *)ftime },
     { "__errno_location", (void *)override_errno_location },
     { "__strdup", (void *)strdup },
@@ -641,6 +694,7 @@ int SDL_main(int argc, char *argv[]) {
     if (g_libstdcpp) {
         LOGI("Successfully loaded GNU STL (libgnustl_shared.so)");
         g_libstdcpp_empty_rep = dlsym(g_libstdcpp, "_ZNSs4_Rep20_S_empty_rep_storageE");
+        dl_iterate_phdr(patch_gnustl_cb, NULL);
     } else {
         LOGW("Could not load libgnustl_shared.so: %s", dlerror());
     }

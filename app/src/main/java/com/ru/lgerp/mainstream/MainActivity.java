@@ -5,6 +5,7 @@ import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
+import android.media.MediaPlayer;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
@@ -36,6 +37,8 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
     private final float[] gyroVals = new float[3];
     private final float[] accelVals = new float[3];
     private final float[] quatVals = new float[] { 1.0f, 0.0f, 0.0f, 0.0f };
+    private static MediaPlayer ndlMediaPlayer;
+    private static String currentGameDir = "";
 
     @Override
     protected String[] getLibraries() {
@@ -64,6 +67,7 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
         }
 
         // Ensure libraries are loaded before calling nativeSetGameConfig
+        currentGameDir = gameDir;
         loadLibraries();
         nativeSetGameConfig(gameDir, gameMain, gameW, gameH);
 
@@ -117,9 +121,78 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
 
     @Override
     protected void onDestroy() {
+        ndlMediaUnload();
         super.onDestroy();
         // Exit :game process cleanly so fixed ELF mappings can reload another game cleanly
         System.exit(0);
+    }
+
+    public static int ndlMediaLoad(String rawPath) {
+        if (rawPath == null || rawPath.isEmpty()) return 0;
+        String p = rawPath;
+        if (p.startsWith("file://")) p = p.substring(7);
+        File f = new File(p);
+        if (!f.exists() && !currentGameDir.isEmpty()) {
+            String rel = p;
+            int idx = rel.indexOf("assets/");
+            if (idx >= 0) rel = rel.substring(idx);
+            else {
+                idx = rel.indexOf("resources/");
+                if (idx >= 0) rel = rel.substring(idx);
+                else {
+                    idx = rel.indexOf("snd/");
+                    if (idx >= 0) rel = rel.substring(idx);
+                    else while (rel.startsWith("/")) rel = rel.substring(1);
+                }
+            }
+            f = new File(currentGameDir, rel);
+        }
+        if (!f.exists()) {
+            Log.w(TAG, "ndlMediaLoad: file not found: " + rawPath + " (tried " + f.getAbsolutePath() + ")");
+            return 1;
+        }
+        try {
+            ndlMediaUnload();
+            MediaPlayer mp = new MediaPlayer();
+            mp.setDataSource(f.getAbsolutePath());
+            mp.setLooping(true);
+            mp.prepare();
+            mp.start();
+            ndlMediaPlayer = mp;
+            Log.i(TAG, "ndlMediaLoad playing: " + f.getAbsolutePath());
+            return 1;
+        } catch (Exception e) {
+            Log.e(TAG, "ndlMediaLoad error", e);
+            return 1;
+        }
+    }
+
+    public static void ndlMediaPlay() {
+        try {
+            if (ndlMediaPlayer != null && !ndlMediaPlayer.isPlaying()) ndlMediaPlayer.start();
+        } catch (Exception ignored) {}
+    }
+
+    public static void ndlMediaPause() {
+        try {
+            if (ndlMediaPlayer != null && ndlMediaPlayer.isPlaying()) ndlMediaPlayer.pause();
+        } catch (Exception ignored) {}
+    }
+
+    public static void ndlMediaSeekTo(int ms) {
+        try {
+            if (ndlMediaPlayer != null) ndlMediaPlayer.seekTo(ms);
+        } catch (Exception ignored) {}
+    }
+
+    public static void ndlMediaUnload() {
+        try {
+            if (ndlMediaPlayer != null) {
+                ndlMediaPlayer.stop();
+                ndlMediaPlayer.release();
+                ndlMediaPlayer = null;
+            }
+        } catch (Exception ignored) {}
     }
 
     @Override

@@ -1,7 +1,7 @@
 #include "webos_bridge.h"
 #include "cJSON.h"
 #include "SDL.h"
-#include "SDL_mixer.h"
+#include <jni.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -316,36 +316,24 @@ int NDL_UnregisterServiceCallback(NDL_Callback cb) {
     return 0;
 }
 
-/* NDL Media (backed by SDL2_mixer for ColorBridge / CutterPillars / etc.) */
-static Mix_Music *s_ndl_music = NULL;
-
-static void ensure_mixer_open(void) {
-    int freq = 0, chans = 0;
-    uint16_t fmt = 0;
-    if (Mix_QuerySpec(&freq, &fmt, &chans) == 0) {
-        Mix_Init(MIX_INIT_MP3);
-        Mix_OpenAudio(44100, AUDIO_S16LSB, 2, 2048);
-    }
+/* NDL Media (backed by Android MediaPlayer via JNI to avoid SDL_OpenAudio conflict) */
+static jclass find_main_activity_class(JNIEnv *env) {
+    if (!env) return NULL;
+    jobject act = (jobject)SDL_AndroidGetActivity();
+    if (!act) return NULL;
+    jclass cls = (*env)->GetObjectClass(env, act);
+    (*env)->DeleteLocalRef(env, act);
+    return cls;
 }
 
-int NDL_MediaInit(const char *appId) {
-    ensure_mixer_open();
-    return 0;
-}
+int NDL_MediaInit(const char *appId) { return 0; }
 
 int NDL_MediaQuit(void) {
-    if (s_ndl_music) {
-        Mix_HaltMusic();
-        Mix_FreeMusic(s_ndl_music);
-        s_ndl_music = NULL;
-    }
-    return 0;
+    return NDL_MediaUnload();
 }
 
 int NDL_MediaLoad(const char *mediaInfo, void *cb) {
     if (!mediaInfo) return 0;
-    ensure_mixer_open();
-
     char path_buf[512] = {0};
     if (mediaInfo[0] == '{') {
         cJSON *root = cJSON_Parse(mediaInfo);
@@ -361,59 +349,61 @@ int NDL_MediaLoad(const char *mediaInfo, void *cb) {
         strncpy(path_buf, mediaInfo, sizeof(path_buf) - 1);
     }
 
-    const char *p = path_buf;
-    if (strncmp(p, "file://", 7) == 0) p += 7;
-    while (*p == '/') p++;
-
-    if (s_ndl_music) {
-        Mix_HaltMusic();
-        Mix_FreeMusic(s_ndl_music);
-        s_ndl_music = NULL;
-    }
-
-    if (*p) {
-        s_ndl_music = Mix_LoadMUS(p);
-        if (s_ndl_music) {
-            Mix_PlayMusic(s_ndl_music, -1);
-            LOGI("NDL_MediaLoad playing [%s]", p);
-            return 1;
+    JNIEnv *env = (JNIEnv *)SDL_AndroidGetJNIEnv();
+    jclass cls = find_main_activity_class(env);
+    int res = 1;
+    if (env && cls) {
+        jmethodID mid = (*env)->GetStaticMethodID(env, cls, "ndlMediaLoad", "(Ljava/lang/String;)I");
+        if (mid) {
+            jstring jpath = (*env)->NewStringUTF(env, path_buf);
+            res = (*env)->CallStaticIntMethod(env, cls, mid, jpath);
+            (*env)->DeleteLocalRef(env, jpath);
         }
-        LOGW("NDL_MediaLoad failed to load [%s]: %s", p, Mix_GetError());
+        (*env)->DeleteLocalRef(env, cls);
     }
-    return 1;
+    return res;
 }
 
 int NDL_MediaUnload(void) {
-    if (s_ndl_music) {
-        Mix_HaltMusic();
-        Mix_FreeMusic(s_ndl_music);
-        s_ndl_music = NULL;
+    JNIEnv *env = (JNIEnv *)SDL_AndroidGetJNIEnv();
+    jclass cls = find_main_activity_class(env);
+    if (env && cls) {
+        jmethodID mid = (*env)->GetStaticMethodID(env, cls, "ndlMediaUnload", "()V");
+        if (mid) (*env)->CallStaticVoidMethod(env, cls, mid);
+        (*env)->DeleteLocalRef(env, cls);
     }
     return 0;
 }
 
 int NDL_MediaPlay(void) {
-    if (s_ndl_music) {
-        if (Mix_PausedMusic()) {
-            Mix_ResumeMusic();
-        } else if (!Mix_PlayingMusic()) {
-            Mix_PlayMusic(s_ndl_music, -1);
-        }
+    JNIEnv *env = (JNIEnv *)SDL_AndroidGetJNIEnv();
+    jclass cls = find_main_activity_class(env);
+    if (env && cls) {
+        jmethodID mid = (*env)->GetStaticMethodID(env, cls, "ndlMediaPlay", "()V");
+        if (mid) (*env)->CallStaticVoidMethod(env, cls, mid);
+        (*env)->DeleteLocalRef(env, cls);
     }
     return 0;
 }
 
 int NDL_MediaPause(void) {
-    if (s_ndl_music && Mix_PlayingMusic()) {
-        Mix_PauseMusic();
+    JNIEnv *env = (JNIEnv *)SDL_AndroidGetJNIEnv();
+    jclass cls = find_main_activity_class(env);
+    if (env && cls) {
+        jmethodID mid = (*env)->GetStaticMethodID(env, cls, "ndlMediaPause", "()V");
+        if (mid) (*env)->CallStaticVoidMethod(env, cls, mid);
+        (*env)->DeleteLocalRef(env, cls);
     }
     return 0;
 }
 
 int NDL_MediaSeekTo(int posMs) {
-    if (s_ndl_music) {
-        Mix_RewindMusic();
-        if (posMs > 0) Mix_SetMusicPosition((double)posMs / 1000.0);
+    JNIEnv *env = (JNIEnv *)SDL_AndroidGetJNIEnv();
+    jclass cls = find_main_activity_class(env);
+    if (env && cls) {
+        jmethodID mid = (*env)->GetStaticMethodID(env, cls, "ndlMediaSeekTo", "(I)V");
+        if (mid) (*env)->CallStaticVoidMethod(env, cls, mid, (jint)posMs);
+        (*env)->DeleteLocalRef(env, cls);
     }
     return 0;
 }
