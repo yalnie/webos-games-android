@@ -32,21 +32,44 @@ int NDL_ServiceCallWithCallback(const char *service, const char *params, NDL_Cal
 const char *NDL_ServiceGetError(void);
 int NDL_UnregisterServiceCallback(NDL_Callback cb);
 
+/* NDL Media */
+int NDL_MediaInit(const char *appId);
+int NDL_MediaQuit(void);
+int NDL_MediaLoad(const char *mediaInfo, void *cb);
+int NDL_MediaUnload(void);
+int NDL_MediaPlay(void);
+int NDL_MediaPause(void);
+int NDL_MediaSeekTo(int posMs);
+int NDL_MediaSubscribeEvents(void *cb, void *userData);
+const char *NDL_MediaGetError(void);
+
+/* Magic Remote / Sensor bridge */
+void webos_update_sensors(float gx, float gy, float gz, float ax, float ay, float az, float q0, float q1, float q2, float q3);
+void webos_update_pointer(int x, int y);
+
 /* LG HAL */
 const char *lg_hal_m3g_OpenGLES_getHint(const char *hint);
 int lg_hal_m3g_stereo3d_isUserAllowed(void);
 int lg_hal_m3g_stereo3d_getModeCount(void);
+
+/* LGNC (NetCast) */
+int LGNC_SYSTEM_Initialize(int argc, char **argv, void *cb);
+int LGNC_SYSTEM_Finalize(void);
+const char *LGNC_SYSTEM_GetLanguage(void);
+const char *LGNC_SYSTEM_GetSaveDirectory(void);
 
 /* Curl Stubs */
 void *curl_easy_init(void);
 int curl_easy_setopt(void *curl, int option, ...);
 int curl_easy_perform(void *curl);
 void curl_easy_cleanup(void *curl);
+const char *curl_easy_strerror(int code);
 char *curl_easy_escape(void *curl, const char *string, int length);
 void curl_free(void *p);
 void *curl_slist_append(void *list, const char *string);
 void curl_slist_free_all(void *list);
 int curl_global_init(long flags);
+void curl_global_cleanup(void);
 
 /* JSON-C API implemented with cJSON */
 void *json_tokener_parse(const char *str);

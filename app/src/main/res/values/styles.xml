@@ -1,4 +1,7 @@
 <resources>
+    <style name="Theme.Launcher" parent="@android:style/Theme.Material">
+    </style>
+
     <style name="Theme.FullScreen" parent="@android:style/Theme.NoTitleBar.Fullscreen">
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowFullscreen">true</item>

@@ -10,6 +10,24 @@
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
+/* Magic Remote / Sensor State */
+static float s_gyro[3] = {0.0f, 0.0f, 0.0f};
+static float s_accel[3] = {0.0f, 0.0f, 9.81f};
+static float s_quat[4] = {1.0f, 0.0f, 0.0f, 0.0f};
+static int s_ptr_x = 0;
+static int s_ptr_y = 0;
+
+void webos_update_sensors(float gx, float gy, float gz, float ax, float ay, float az, float q0, float q1, float q2, float q3) {
+    s_gyro[0] = gx; s_gyro[1] = gy; s_gyro[2] = gz;
+    s_accel[0] = ax; s_accel[1] = ay; s_accel[2] = az;
+    s_quat[0] = q0; s_quat[1] = q1; s_quat[2] = q2; s_quat[3] = q3;
+}
+
+void webos_update_pointer(int x, int y) {
+    s_ptr_x = x;
+    s_ptr_y = y;
+}
+
 /* Time */
 int ftime(struct timeb *tp) {
     if (!tp) return -1;
@@ -263,6 +281,22 @@ int NDL_ServiceCallWithCallback(const char *service, const char *params, NDL_Cal
         } else if (strstr(service, "putKind")) {
             resp.json_str = "{\"returnValue\": true}";
         }
+    } else if (service && strstr(service, "com.webos.service.mrcu")) {
+        if (strstr(service, "getSensorData")) {
+            snprintf(s_response_json, sizeof(s_response_json),
+                     "{\"returnValue\": true, \"deviceId\": 0, "
+                     "\"coordinate\": {\"x\": %d, \"y\": %d}, "
+                     "\"gyroscope\": {\"x\": %.6f, \"y\": %.6f, \"z\": %.6f}, "
+                     "\"acceleration\": {\"x\": %.6f, \"y\": %.6f, \"z\": %.6f}, "
+                     "\"quaternion\": {\"q0\": %.6f, \"q1\": %.6f, \"q2\": %.6f, \"q3\": %.6f}}",
+                     s_ptr_x, s_ptr_y,
+                     s_gyro[0], s_gyro[1], s_gyro[2],
+                     s_accel[0], s_accel[1], s_accel[2],
+                     s_quat[0], s_quat[1], s_quat[2], s_quat[3]);
+            resp.json_str = s_response_json;
+        } else {
+            resp.json_str = "{\"returnValue\": true}";
+        }
     }
 
     if (cb) {
@@ -280,6 +314,17 @@ int NDL_UnregisterServiceCallback(NDL_Callback cb) {
     return 0;
 }
 
+/* NDL Media */
+int NDL_MediaInit(const char *appId) { return 0; }
+int NDL_MediaQuit(void) { return 0; }
+int NDL_MediaLoad(const char *mediaInfo, void *cb) { return 0; }
+int NDL_MediaUnload(void) { return 0; }
+int NDL_MediaPlay(void) { return 0; }
+int NDL_MediaPause(void) { return 0; }
+int NDL_MediaSeekTo(int posMs) { return 0; }
+int NDL_MediaSubscribeEvents(void *cb, void *userData) { return 0; }
+const char *NDL_MediaGetError(void) { return ""; }
+
 /* LG HAL */
 const char *lg_hal_m3g_OpenGLES_getHint(const char *hint) {
     if (hint && strcmp(hint, "aa_samples_preferred") == 0) return "2";
@@ -293,6 +338,12 @@ int lg_hal_m3g_stereo3d_isUserAllowed(void) {
 int lg_hal_m3g_stereo3d_getModeCount(void) {
     return 0;
 }
+
+/* LGNC (NetCast) */
+int LGNC_SYSTEM_Initialize(int argc, char **argv, void *cb) { return 0; }
+int LGNC_SYSTEM_Finalize(void) { return 0; }
+const char *LGNC_SYSTEM_GetLanguage(void) { return "en"; }
+const char *LGNC_SYSTEM_GetSaveDirectory(void) { return "."; }
 
 /* Curl Stubs */
 void *curl_easy_init(void) {
@@ -308,6 +359,10 @@ int curl_easy_perform(void *curl) {
 }
 
 void curl_easy_cleanup(void *curl) {}
+
+const char *curl_easy_strerror(int code) {
+    return "No error";
+}
 
 char *curl_easy_escape(void *curl, const char *string, int length) {
     return strdup(string ? string : "");
@@ -326,6 +381,8 @@ void curl_slist_free_all(void *list) {}
 int curl_global_init(long flags) {
     return 0;
 }
+
+void curl_global_cleanup(void) {}
 
 /* JSON-C API */
 void *json_tokener_parse(const char *str) {
@@ -361,9 +418,18 @@ int json_object_get_int(void *jso) {
 }
 
 const char *json_object_get_string(void *jso) {
+    static char s_json_str_buf[4096];
     if (!jso) return "";
     cJSON *item = (cJSON *)jso;
-    return item->valuestring ? item->valuestring : "";
+    if (item->valuestring) return item->valuestring;
+    char *printed = cJSON_PrintUnformatted(item);
+    if (printed) {
+        strncpy(s_json_str_buf, printed, sizeof(s_json_str_buf) - 1);
+        s_json_str_buf[sizeof(s_json_str_buf) - 1] = '\0';
+        free(printed);
+        return s_json_str_buf;
+    }
+    return "";
 }
 
 int json_object_array_length(void *jso) {

@@ -1,6 +1,10 @@
 package com.ru.lgerp.mainstream;
 
 import android.content.res.AssetManager;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
@@ -17,8 +21,21 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 
-public class MainActivity extends SDLActivity {
+public class MainActivity extends SDLActivity implements SensorEventListener {
     private static final String TAG = "Mainstream";
+
+    public static final String EXTRA_GAME_DIR = "game_dir";
+    public static final String EXTRA_GAME_MAIN = "game_main";
+    public static final String EXTRA_GAME_WIDTH = "game_width";
+    public static final String EXTRA_GAME_HEIGHT = "game_height";
+
+    public static native void nativeSetGameConfig(String gameDir, String gameMain, int width, int height);
+    public static native void nativeUpdateSensors(float gx, float gy, float gz, float ax, float ay, float az, float q0, float q1, float q2, float q3);
+
+    private SensorManager sensorManager;
+    private final float[] gyroVals = new float[3];
+    private final float[] accelVals = new float[3];
+    private final float[] quatVals = new float[] { 1.0f, 0.0f, 0.0f, 0.0f };
 
     @Override
     protected String[] getLibraries() {
@@ -32,8 +49,23 @@ public class MainActivity extends SDLActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-        // Extract assets to internal files directory BEFORE SDL initializes or starts threads
-        extractAssetsIfNeeded();
+        String gameDir = getIntent().getStringExtra(EXTRA_GAME_DIR);
+        String gameMain = getIntent().getStringExtra(EXTRA_GAME_MAIN);
+        int gameW = getIntent().getIntExtra(EXTRA_GAME_WIDTH, 1920);
+        int gameH = getIntent().getIntExtra(EXTRA_GAME_HEIGHT, 1080);
+
+        if (gameDir == null || gameDir.isEmpty()) {
+            // Fallback to internal files directory if launched directly
+            extractAssetsIfNeeded();
+            gameDir = getFilesDir().getAbsolutePath();
+        }
+        if (gameMain == null || gameMain.isEmpty()) {
+            gameMain = "mainstream";
+        }
+
+        // Ensure libraries are loaded before calling nativeSetGameConfig
+        loadLibraries();
+        nativeSetGameConfig(gameDir, gameMain, gameW, gameH);
 
         super.onCreate(savedInstanceState);
 
@@ -58,7 +90,59 @@ public class MainActivity extends SDLActivity {
                 }
             );
         }
+
+        sensorManager = (SensorManager) getSystemService(SENSOR_SERVICE);
     }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (sensorManager != null) {
+            Sensor gyro = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
+            Sensor accel = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+            Sensor rot = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR);
+            if (gyro != null) sensorManager.registerListener(this, gyro, SensorManager.SENSOR_DELAY_GAME);
+            if (accel != null) sensorManager.registerListener(this, accel, SensorManager.SENSOR_DELAY_GAME);
+            if (rot != null) sensorManager.registerListener(this, rot, SensorManager.SENSOR_DELAY_GAME);
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        if (sensorManager != null) {
+            sensorManager.unregisterListener(this);
+        }
+        super.onPause();
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        // Exit :game process cleanly so fixed ELF mappings can reload another game cleanly
+        System.exit(0);
+    }
+
+    @Override
+    public void onSensorChanged(SensorEvent event) {
+        if (event.sensor.getType() == Sensor.TYPE_GYROSCOPE) {
+            gyroVals[0] = event.values[0];
+            gyroVals[1] = event.values[1];
+            gyroVals[2] = event.values[2];
+        } else if (event.sensor.getType() == Sensor.TYPE_ACCELEROMETER) {
+            accelVals[0] = event.values[0];
+            accelVals[1] = event.values[1];
+            accelVals[2] = event.values[2];
+        } else if (event.sensor.getType() == Sensor.TYPE_ROTATION_VECTOR) {
+            SensorManager.getQuaternionFromVector(quatVals, event.values);
+        }
+        nativeUpdateSensors(
+                gyroVals[0], gyroVals[1], gyroVals[2],
+                accelVals[0], accelVals[1], accelVals[2],
+                quatVals[0], quatVals[1], quatVals[2], quatVals[3]);
+    }
+
+    @Override
+    public void onAccuracyChanged(Sensor sensor, int accuracy) {}
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {

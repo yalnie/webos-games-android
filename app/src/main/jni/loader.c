@@ -10,8 +10,10 @@
 #include <pthread.h>
 #include <math.h>
 #include <errno.h>
+#include <sys/stat.h>
 #include <android/log.h>
 #include <GLES2/gl2.h>
+#include <jni.h>
 
 #include "SDL.h"
 #include "webos_bridge.h"
@@ -21,21 +23,41 @@
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
-#define CODE_BASE  0x00008000
-#define CODE_SIZE  0x001ca3c0
-#define DATA_BASE  0x001db000
-#define DATA_SIZE  0x0004dea4
-#define INIT_ARRAY 0x001db000
-#define INIT_COUNT 8
-#define GAME_ENTRY 0x0003015c
+static char g_game_dir[1024] = {0};
+static char g_game_main[256] = "mainstream";
+static int g_game_w = 1920;
+static int g_game_h = 1080;
 
-/* Absolute virtual addresses of dynamic ELF tables in mainstream */
-#define DYNSYM_ADDR  0x0000d370
-#define DYNSTR_ADDR  0x00017c10
-#define REL_DYN_ADDR 0x0002e088
-#define REL_DYN_SIZE 0x000000d8
-#define REL_PLT_ADDR 0x0002e160
-#define REL_PLT_SIZE 0x00000b50
+JNIEXPORT void JNICALL Java_com_ru_lgerp_mainstream_MainActivity_nativeSetGameConfig(
+        JNIEnv *env, jclass cls, jstring gameDir, jstring gameMain, jint width, jint height) {
+    if (gameDir) {
+        const char *s = (*env)->GetStringUTFChars(env, gameDir, NULL);
+        if (s) {
+            strncpy(g_game_dir, s, sizeof(g_game_dir) - 1);
+            g_game_dir[sizeof(g_game_dir) - 1] = '\0';
+            (*env)->ReleaseStringUTFChars(env, gameDir, s);
+        }
+    }
+    if (gameMain) {
+        const char *s = (*env)->GetStringUTFChars(env, gameMain, NULL);
+        if (s) {
+            strncpy(g_game_main, s, sizeof(g_game_main) - 1);
+            g_game_main[sizeof(g_game_main) - 1] = '\0';
+            (*env)->ReleaseStringUTFChars(env, gameMain, s);
+        }
+    }
+    if (width > 0) g_game_w = (int)width;
+    if (height > 0) g_game_h = (int)height;
+    LOGI("Configured game: dir=%s main=%s res=%dx%d", g_game_dir, g_game_main, g_game_w, g_game_h);
+}
+
+JNIEXPORT void JNICALL Java_com_ru_lgerp_mainstream_MainActivity_nativeUpdateSensors(
+        JNIEnv *env, jclass cls,
+        jfloat gx, jfloat gy, jfloat gz,
+        jfloat ax, jfloat ay, jfloat az,
+        jfloat q0, jfloat q1, jfloat q2, jfloat q3) {
+    webos_update_sensors(gx, gy, gz, ax, ay, az, q0, q1, q2, q3);
+}
 
 static FILE *g_stderr_ptr = NULL;
 static FILE *g_stdout_ptr = NULL;
@@ -172,10 +194,10 @@ static void ensure_viewport_metrics(void) {
 static void override_glViewport(GLint x, GLint y, GLsizei width, GLsizei height) {
     ensure_viewport_metrics();
     if (s_vp_w > 0 && s_vp_h > 0) {
-        GLint nx = s_vp_x + (GLint)((float)x * s_vp_w / 1920.0f);
-        GLint ny = s_vp_y + (GLint)((float)y * s_vp_h / 1080.0f);
-        GLsizei nw = (GLsizei)((float)width * s_vp_w / 1920.0f);
-        GLsizei nh = (GLsizei)((float)height * s_vp_h / 1080.0f);
+        GLint nx = s_vp_x + (GLint)((float)x * s_vp_w / (float)g_game_w);
+        GLint ny = s_vp_y + (GLint)((float)y * s_vp_h / (float)g_game_h);
+        GLsizei nw = (GLsizei)((float)width * s_vp_w / (float)g_game_w);
+        GLsizei nh = (GLsizei)((float)height * s_vp_h / (float)g_game_h);
         glViewport(nx, ny, nw, nh);
     } else {
         glViewport(x, y, width, height);
@@ -185,10 +207,10 @@ static void override_glViewport(GLint x, GLint y, GLsizei width, GLsizei height)
 static void override_glScissor(GLint x, GLint y, GLsizei width, GLsizei height) {
     ensure_viewport_metrics();
     if (s_vp_w > 0 && s_vp_h > 0) {
-        GLint nx = s_vp_x + (GLint)((float)x * s_vp_w / 1920.0f);
-        GLint ny = s_vp_y + (GLint)((float)y * s_vp_h / 1080.0f);
-        GLsizei nw = (GLsizei)((float)width * s_vp_w / 1920.0f);
-        GLsizei nh = (GLsizei)((float)height * s_vp_h / 1080.0f);
+        GLint nx = s_vp_x + (GLint)((float)x * s_vp_w / (float)g_game_w);
+        GLint ny = s_vp_y + (GLint)((float)y * s_vp_h / (float)g_game_h);
+        GLsizei nw = (GLsizei)((float)width * s_vp_w / (float)g_game_w);
+        GLsizei nh = (GLsizei)((float)height * s_vp_h / (float)g_game_h);
         glScissor(nx, ny, nw, nh);
     } else {
         glScissor(x, y, width, height);
@@ -237,26 +259,28 @@ static int override_SDL_PollEvent(SDL_Event *event) {
 
     ensure_viewport_metrics();
 
-    /* 1. Scale touch/mouse coordinates from centered 16:9 space to 1920x1080 */
+    /* 1. Scale touch/mouse coordinates from centered 16:9 space to game resolution */
     if (s_vp_w > 0 && s_vp_h > 0) {
         if (event->type == SDL_MOUSEMOTION) {
-            float mapped_x = ((float)event->motion.x - (float)s_vp_x) * 1920.0f / (float)s_vp_w;
-            float mapped_y = ((float)event->motion.y - (float)s_vp_y) * 1080.0f / (float)s_vp_h;
+            float mapped_x = ((float)event->motion.x - (float)s_vp_x) * (float)g_game_w / (float)s_vp_w;
+            float mapped_y = ((float)event->motion.y - (float)s_vp_y) * (float)g_game_h / (float)s_vp_h;
             if (mapped_x < 0.0f) mapped_x = 0.0f;
-            if (mapped_x > 1920.0f) mapped_x = 1920.0f;
+            if (mapped_x > (float)g_game_w) mapped_x = (float)g_game_w;
             if (mapped_y < 0.0f) mapped_y = 0.0f;
-            if (mapped_y > 1080.0f) mapped_y = 1080.0f;
+            if (mapped_y > (float)g_game_h) mapped_y = (float)g_game_h;
             event->motion.x = (int)mapped_x;
             event->motion.y = (int)mapped_y;
+            webos_update_pointer(event->motion.x, event->motion.y);
         } else if (event->type == SDL_MOUSEBUTTONDOWN || event->type == SDL_MOUSEBUTTONUP) {
-            float mapped_x = ((float)event->button.x - (float)s_vp_x) * 1920.0f / (float)s_vp_w;
-            float mapped_y = ((float)event->button.y - (float)s_vp_y) * 1080.0f / (float)s_vp_h;
+            float mapped_x = ((float)event->button.x - (float)s_vp_x) * (float)g_game_w / (float)s_vp_w;
+            float mapped_y = ((float)event->button.y - (float)s_vp_y) * (float)g_game_h / (float)s_vp_h;
             if (mapped_x < 0.0f) mapped_x = 0.0f;
-            if (mapped_x > 1920.0f) mapped_x = 1920.0f;
+            if (mapped_x > (float)g_game_w) mapped_x = (float)g_game_w;
             if (mapped_y < 0.0f) mapped_y = 0.0f;
-            if (mapped_y > 1080.0f) mapped_y = 1080.0f;
+            if (mapped_y > (float)g_game_h) mapped_y = (float)g_game_h;
             event->button.x = (int)mapped_x;
             event->button.y = (int)mapped_y;
+            webos_update_pointer(event->button.x, event->button.y);
         }
     }
 
@@ -323,10 +347,27 @@ static const struct SymbolOverride g_overrides[] = {
     { "NDL_ServiceGetError", (void *)NDL_ServiceGetError },
     { "NDL_UnregisterServiceCallback", (void *)NDL_UnregisterServiceCallback },
 
+    /* NDL Media */
+    { "NDL_MediaInit", (void *)NDL_MediaInit },
+    { "NDL_MediaQuit", (void *)NDL_MediaQuit },
+    { "NDL_MediaLoad", (void *)NDL_MediaLoad },
+    { "NDL_MediaUnload", (void *)NDL_MediaUnload },
+    { "NDL_MediaPlay", (void *)NDL_MediaPlay },
+    { "NDL_MediaPause", (void *)NDL_MediaPause },
+    { "NDL_MediaSeekTo", (void *)NDL_MediaSeekTo },
+    { "NDL_MediaSubscribeEvents", (void *)NDL_MediaSubscribeEvents },
+    { "NDL_MediaGetError", (void *)NDL_MediaGetError },
+
     /* LG HAL */
     { "lg_hal_m3g_OpenGLES_getHint", (void *)lg_hal_m3g_OpenGLES_getHint },
     { "lg_hal_m3g_stereo3d_isUserAllowed", (void *)lg_hal_m3g_stereo3d_isUserAllowed },
     { "lg_hal_m3g_stereo3d_getModeCount", (void *)lg_hal_m3g_stereo3d_getModeCount },
+
+    /* LGNC (NetCast) */
+    { "LGNC_SYSTEM_Initialize", (void *)LGNC_SYSTEM_Initialize },
+    { "LGNC_SYSTEM_Finalize", (void *)LGNC_SYSTEM_Finalize },
+    { "LGNC_SYSTEM_GetLanguage", (void *)LGNC_SYSTEM_GetLanguage },
+    { "LGNC_SYSTEM_GetSaveDirectory", (void *)LGNC_SYSTEM_GetSaveDirectory },
 
     /* GLib Base64 */
     { "g_base64_encode", (void *)g_base64_encode },
@@ -335,10 +376,12 @@ static const struct SymbolOverride g_overrides[] = {
 
     /* Curl */
     { "curl_global_init", (void *)curl_global_init },
+    { "curl_global_cleanup", (void *)curl_global_cleanup },
     { "curl_easy_init", (void *)curl_easy_init },
     { "curl_easy_setopt", (void *)curl_easy_setopt },
     { "curl_easy_perform", (void *)curl_easy_perform },
     { "curl_easy_cleanup", (void *)curl_easy_cleanup },
+    { "curl_easy_strerror", (void *)curl_easy_strerror },
     { "curl_easy_escape", (void *)curl_easy_escape },
     { "curl_free", (void *)curl_free },
     { "curl_slist_append", (void *)curl_slist_append },
@@ -356,9 +399,32 @@ static const struct SymbolOverride g_overrides[] = {
     { "json_object_get_double", (void *)json_object_get_double },
     { "json_object_get_type", (void *)json_object_get_type },
 
+static int override_xstat(int ver, const char *path, struct stat *buf) {
+    return stat(path, buf);
+}
+
+static int (*g_captured_main)(int, char **, char **) = NULL;
+static int override_libc_start_main(
+        int (*main_fn)(int, char **, char **),
+        int argc, char **ubp_av,
+        void (*init)(void), void (*fini)(void),
+        void (*rtld_fini)(void), void *stack_end) {
+    g_captured_main = main_fn;
+    LOGI("Captured main_fn=%p via __libc_start_main!", main_fn);
+    if (init) init();
+    if (main_fn) {
+        extern char **environ;
+        return main_fn(argc, ubp_av, environ);
+    }
+    return 0;
+}
+
     /* Libc / Math / C++ overrides */
     { "fopen", (void *)override_fopen },
     { "ftime", (void *)ftime },
+    { "__strdup", (void *)strdup },
+    { "__xstat", (void *)override_xstat },
+    { "__libc_start_main", (void *)override_libc_start_main },
     { "__pthread_key_create", (void *)pthread_key_create },
     { "__isoc99_sscanf", (void *)sscanf },
     { "__isnan", (void *)stub_isnan },
@@ -424,15 +490,15 @@ static void *resolve_symbol(const char *name) {
 }
 
 int SDL_main(int argc, char *argv[]) {
-    LOGI("Mainstream loader starting up...");
+    LOGI("Universal webOS ELF loader starting up...");
 
-    /* 1. Set working directory to app internal files directory where assets are extracted */
-    const char *internal_path = SDL_AndroidGetInternalStoragePath();
-    if (internal_path && *internal_path) {
-        if (chdir(internal_path) == 0) {
-            LOGI("Working directory changed to: %s", internal_path);
+    /* 1. Set working directory to game directory (or internal files fallback) */
+    const char *work_dir = g_game_dir[0] ? g_game_dir : SDL_AndroidGetInternalStoragePath();
+    if (work_dir && *work_dir) {
+        if (chdir(work_dir) == 0) {
+            LOGI("Working directory changed to: %s", work_dir);
         } else {
-            LOGW("chdir(%s) failed: %s", internal_path, strerror(errno));
+            LOGW("chdir(%s) failed: %s", work_dir, strerror(errno));
         }
     }
 
@@ -442,12 +508,15 @@ int SDL_main(int argc, char *argv[]) {
     SDL_SetHint("SDL_TOUCH_MOUSE_EVENTS", "0");
 
     /* 2. Open binary */
-    FILE *f = fopen("mainstream", "rb");
+    const char *bin_name = g_game_main[0] ? g_game_main : "mainstream";
+    FILE *f = fopen(bin_name, "rb");
     if (!f) {
-        f = fopen("./mainstream", "rb");
+        char rel[300];
+        snprintf(rel, sizeof(rel), "./%s", bin_name);
+        f = fopen(rel, "rb");
     }
     if (!f) {
-        LOGE("Failed to open mainstream binary! Current dir: %s, errno: %s", internal_path ? internal_path : ".", strerror(errno));
+        LOGE("Failed to open game binary [%s] in %s: %s", bin_name, work_dir ? work_dir : ".", strerror(errno));
         return 1;
     }
 
@@ -459,130 +528,221 @@ int SDL_main(int argc, char *argv[]) {
         LOGW("Could not load libgnustl_shared.so: %s", dlerror());
     }
 
-    /* 4. Map PT_LOAD Segment 0 (Code/RO Data) at fixed base 0x8000 */
-    void *code_map = mmap((void *)CODE_BASE, CODE_SIZE,
-                          PROT_READ | PROT_WRITE,
-                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
-    if (code_map == MAP_FAILED) {
-        LOGE("mmap CODE_BASE 0x%x failed: %s", CODE_BASE, strerror(errno));
+    /* 4. Parse ELF32 Header & Program Headers dynamically */
+    Elf32_Ehdr ehdr;
+    if (fread(&ehdr, 1, sizeof(ehdr), f) != sizeof(ehdr)) {
+        LOGE("Failed to read ELF header");
+        fclose(f);
+        return 1;
+    }
+    if (memcmp(ehdr.e_ident, ELFMAG, SELFMAG) != 0 ||
+        ehdr.e_ident[EI_CLASS] != ELFCLASS32 ||
+        ehdr.e_machine != EM_ARM) {
+        LOGE("Unsupported ELF binary (expected ARM32 ELF)");
         fclose(f);
         return 1;
     }
 
-    fseek(f, 0, SEEK_SET);
-    if (fread(code_map, 1, CODE_SIZE, f) != CODE_SIZE) {
-        LOGE("Failed to read CODE segment data!");
+    if (ehdr.e_phnum == 0 || ehdr.e_phnum > 32) {
+        LOGE("Invalid e_phnum: %u", ehdr.e_phnum);
         fclose(f);
         return 1;
     }
 
-    /* 5. Map PT_LOAD Segment 1 (Data / BSS) at fixed base 0x1db000 */
-    void *data_map = mmap((void *)DATA_BASE, DATA_SIZE,
-                          PROT_READ | PROT_WRITE,
-                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
-    if (data_map == MAP_FAILED) {
-        LOGE("mmap DATA_BASE 0x%x failed: %s", DATA_BASE, strerror(errno));
+    Elf32_Phdr phdrs[32];
+    fseek(f, ehdr.e_phoff, SEEK_SET);
+    if (fread(phdrs, sizeof(Elf32_Phdr), ehdr.e_phnum, f) != ehdr.e_phnum) {
+        LOGE("Failed to read program headers");
         fclose(f);
         return 1;
     }
 
-    /* Data segment in file is at offset 0x1cb000, size 0x4288 */
-    fseek(f, 0x1cb000, SEEK_SET);
-    size_t file_data_size = 0x4288;
-    if (fread(data_map, 1, file_data_size, f) != file_data_size) {
-        LOGE("Failed to read DATA segment data!");
-        fclose(f);
-        return 1;
-    }
-    /* Zero out BSS */
-    memset((char *)data_map + file_data_size, 0, DATA_SIZE - file_data_size);
-
-    /* 6. Dynamic symbol table and string table (mapped at their fixed virtual addresses) */
-    Elf32_Sym *dynsym = (Elf32_Sym *)DYNSYM_ADDR;
-    const char *dynstr = (const char *)DYNSTR_ADDR;
-
-    /* 7. Process .rel.plt (at fixed virtual address 0x2e160, 362 entries) */
-    Elf32_Rel *rel_plt = (Elf32_Rel *)REL_PLT_ADDR;
-    size_t plt_count = REL_PLT_SIZE / sizeof(Elf32_Rel);
-    LOGI("Relocating %zu PLT entries from %p...", plt_count, rel_plt);
-
-    for (size_t i = 0; i < plt_count; i++) {
-        uint32_t r_offset = rel_plt[i].r_offset;
-        uint32_t r_info = rel_plt[i].r_info;
-        uint32_t sym_idx = ELF32_R_SYM(r_info);
-        uint32_t r_type = ELF32_R_TYPE(r_info);
-
-        const char *sym_name = dynstr + dynsym[sym_idx].st_name;
-        void *resolved = resolve_symbol(sym_name);
-
-        if (r_type == R_ARM_JUMP_SLOT) {
-            *(uintptr_t *)r_offset = (uintptr_t)resolved;
-        } else {
-            LOGW("Unexpected PLT rel type %u at 0x%x for %s", r_type, r_offset, sym_name);
+    /* 5. Map all PT_LOAD segments at their fixed virtual addresses */
+    uintptr_t dyn_vaddr = 0;
+    for (int i = 0; i < ehdr.e_phnum; i++) {
+        if (phdrs[i].p_type == PT_DYNAMIC) {
+            dyn_vaddr = phdrs[i].p_vaddr;
         }
+        if (phdrs[i].p_type != PT_LOAD || phdrs[i].p_memsz == 0) continue;
+
+        uintptr_t seg_start = phdrs[i].p_vaddr & ~0xFFFU;
+        uintptr_t seg_end = (phdrs[i].p_vaddr + phdrs[i].p_memsz + 0xFFFU) & ~0xFFFU;
+        size_t map_len = seg_end - seg_start;
+
+        void *mapped = mmap((void *)seg_start, map_len,
+                            PROT_READ | PROT_WRITE,
+                            MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+        if (mapped == MAP_FAILED) {
+            LOGE("mmap segment %d at 0x%x (len 0x%zx) failed: %s",
+                 i, (unsigned)seg_start, map_len, strerror(errno));
+            fclose(f);
+            return 1;
+        }
+        memset(mapped, 0, map_len);
+
+        if (phdrs[i].p_filesz > 0) {
+            fseek(f, phdrs[i].p_offset, SEEK_SET);
+            if (fread((void *)phdrs[i].p_vaddr, 1, phdrs[i].p_filesz, f) != phdrs[i].p_filesz) {
+                LOGE("Failed to read PT_LOAD segment %d", i);
+                fclose(f);
+                return 1;
+            }
+        }
+        LOGI("Mapped PT_LOAD[%d]: vaddr=0x%x filesz=0x%x memsz=0x%x flags=0x%x",
+             i, phdrs[i].p_vaddr, phdrs[i].p_filesz, phdrs[i].p_memsz, phdrs[i].p_flags);
     }
 
-    /* 8. Process .rel.dyn (at fixed virtual address 0x2e088, 27 entries) */
-    Elf32_Rel *rel_dyn = (Elf32_Rel *)REL_DYN_ADDR;
-    size_t dyn_count = REL_DYN_SIZE / sizeof(Elf32_Rel);
-    LOGI("Relocating %zu DYN entries from %p...", dyn_count, rel_dyn);
+    /* 6. Parse PT_DYNAMIC table */
+    Elf32_Sym *dynsym = NULL;
+    const char *dynstr = NULL;
+    Elf32_Rel *rel_plt = NULL;
+    size_t rel_plt_sz = 0;
+    Elf32_Rel *rel_dyn = NULL;
+    size_t rel_dyn_sz = 0;
+    uintptr_t dt_init = 0;
+    uintptr_t dt_init_array = 0;
+    size_t dt_init_array_sz = 0;
+    size_t dynsym_count = 0;
 
-    for (size_t i = 0; i < dyn_count; i++) {
-        uint32_t r_offset = rel_dyn[i].r_offset;
-        uint32_t r_info = rel_dyn[i].r_info;
-        uint32_t sym_idx = ELF32_R_SYM(r_info);
-        uint32_t r_type = ELF32_R_TYPE(r_info);
-
-        const char *sym_name = dynstr + dynsym[sym_idx].st_name;
-        void *resolved = resolve_symbol(sym_name);
-
-        if (r_type == R_ARM_GLOB_DAT) {
-            *(uintptr_t *)r_offset = (uintptr_t)resolved;
-        } else if (r_type == R_ARM_COPY) {
-            if (resolved && resolved != (void *)dummy_stub && dynsym[sym_idx].st_size > 0) {
-                memcpy((void *)r_offset, resolved, dynsym[sym_idx].st_size);
+    if (dyn_vaddr) {
+        Elf32_Dyn *dyn = (Elf32_Dyn *)dyn_vaddr;
+        for (; dyn->d_tag != DT_NULL; dyn++) {
+            switch (dyn->d_tag) {
+                case DT_SYMTAB: dynsym = (Elf32_Sym *)dyn->d_un.d_ptr; break;
+                case DT_STRTAB: dynstr = (const char *)dyn->d_un.d_ptr; break;
+                case DT_JMPREL: rel_plt = (Elf32_Rel *)dyn->d_un.d_ptr; break;
+                case DT_PLTRELSZ: rel_plt_sz = dyn->d_un.d_val; break;
+                case DT_REL: rel_dyn = (Elf32_Rel *)dyn->d_un.d_ptr; break;
+                case DT_RELSZ: rel_dyn_sz = dyn->d_un.d_val; break;
+                case DT_INIT: dt_init = dyn->d_un.d_ptr; break;
+                case DT_INIT_ARRAY: dt_init_array = dyn->d_un.d_ptr; break;
+                case DT_INIT_ARRAYSZ: dt_init_array_sz = dyn->d_un.d_val; break;
+                default: break;
             }
         }
     }
 
-    /* 9. Set permissions on code segment: PROT_READ | PROT_EXEC */
-    if (mprotect((void *)CODE_BASE, CODE_SIZE, PROT_READ | PROT_EXEC) != 0) {
-        LOGE("mprotect PROT_READ|PROT_EXEC failed: %s", strerror(errno));
-        fclose(f);
-        return 1;
+    if (dynsym && dynstr && (uintptr_t)dynstr > (uintptr_t)dynsym) {
+        dynsym_count = ((uintptr_t)dynstr - (uintptr_t)dynsym) / sizeof(Elf32_Sym);
+    }
+
+    /* 7. Process .rel.plt */
+    if (rel_plt && dynsym && dynstr) {
+        size_t plt_count = rel_plt_sz / sizeof(Elf32_Rel);
+        LOGI("Relocating %zu PLT entries...", plt_count);
+        for (size_t i = 0; i < plt_count; i++) {
+            uint32_t r_offset = rel_plt[i].r_offset;
+            uint32_t r_info = rel_plt[i].r_info;
+            uint32_t sym_idx = ELF32_R_SYM(r_info);
+            uint32_t r_type = ELF32_R_TYPE(r_info);
+            const char *sym_name = dynstr + dynsym[sym_idx].st_name;
+            void *resolved = resolve_symbol(sym_name);
+            if (r_type == R_ARM_JUMP_SLOT) {
+                *(uintptr_t *)r_offset = (uintptr_t)resolved;
+            }
+        }
+    }
+
+    /* 8. Process .rel.dyn */
+    if (rel_dyn && dynsym && dynstr) {
+        size_t dyn_count = rel_dyn_sz / sizeof(Elf32_Rel);
+        LOGI("Relocating %zu DYN entries...", dyn_count);
+        for (size_t i = 0; i < dyn_count; i++) {
+            uint32_t r_offset = rel_dyn[i].r_offset;
+            uint32_t r_info = rel_dyn[i].r_info;
+            uint32_t sym_idx = ELF32_R_SYM(r_info);
+            uint32_t r_type = ELF32_R_TYPE(r_info);
+            const char *sym_name = dynstr + dynsym[sym_idx].st_name;
+            void *resolved = resolve_symbol(sym_name);
+            if (r_type == R_ARM_GLOB_DAT) {
+                *(uintptr_t *)r_offset = (uintptr_t)resolved;
+            } else if (r_type == R_ARM_COPY) {
+                if (resolved && resolved != (void *)dummy_stub && dynsym[sym_idx].st_size > 0) {
+                    memcpy((void *)r_offset, resolved, dynsym[sym_idx].st_size);
+                }
+            }
+        }
+    }
+
+    /* 9. Apply PROT_READ | PROT_EXEC on executable PT_LOAD segments */
+    for (int i = 0; i < ehdr.e_phnum; i++) {
+        if (phdrs[i].p_type == PT_LOAD && (phdrs[i].p_flags & PF_X) && phdrs[i].p_memsz > 0) {
+            uintptr_t seg_start = phdrs[i].p_vaddr & ~0xFFFU;
+            uintptr_t seg_end = (phdrs[i].p_vaddr + phdrs[i].p_memsz + 0xFFFU) & ~0xFFFU;
+            if (mprotect((void *)seg_start, seg_end - seg_start, PROT_READ | PROT_EXEC) != 0) {
+                LOGE("mprotect RX failed for segment %d: %s", i, strerror(errno));
+                fclose(f);
+                return 1;
+            }
+        }
+    }
+
+    /* Look up exported 'main' in .dynsym before closing file */
+    uintptr_t game_main_addr = 0;
+    if (dynsym && dynstr) {
+        for (size_t i = 0; i < dynsym_count; i++) {
+            const char *nm = dynstr + dynsym[i].st_name;
+            if (strcmp(nm, "main") == 0 && dynsym[i].st_value != 0) {
+                game_main_addr = dynsym[i].st_value;
+                break;
+            }
+        }
     }
 
     fclose(f);
-    LOGI("Memory mapping and relocations finished successfully!");
+    LOGI("Memory mapping and relocations finished! dt_init=0x%x init_array=0x%x main=0x%x e_entry=0x%x",
+         (unsigned)dt_init, (unsigned)dt_init_array, (unsigned)game_main_addr, (unsigned)ehdr.e_entry);
 
-    /* 10. Run static constructors in .init_array */
+    /* 10. Run DT_INIT and DT_INIT_ARRAY constructors */
     typedef void (*ctor_t)(void);
-    ctor_t *ctors = (ctor_t *)INIT_ARRAY;
-    for (int i = 0; i < INIT_COUNT; i++) {
-        if (ctors[i]) {
-            LOGI("Executing constructor [%d] at %p...", i, ctors[i]);
-            ctors[i]();
+    if (dt_init) {
+        ((ctor_t)dt_init)();
+    }
+    if (dt_init_array && dt_init_array_sz > 0) {
+        ctor_t *ctors = (ctor_t *)dt_init_array;
+        size_t count = dt_init_array_sz / sizeof(ctor_t);
+        for (size_t i = 0; i < count; i++) {
+            if (ctors[i] && (uintptr_t)ctors[i] != (uintptr_t)-1) {
+                ctors[i]();
+            }
         }
     }
 
     /* 11. Launch game main */
-    FILE *test_appinfo = fopen("appinfo.json", "rb");
-    if (test_appinfo) {
-        fseek(test_appinfo, 0, SEEK_END);
-        long sz = ftell(test_appinfo);
-        fclose(test_appinfo);
-        LOGI("Verified appinfo.json exists (size: %ld bytes)", sz);
-    } else {
-        LOGE("Warning: appinfo.json open failed: %s (cwd: %s)", strerror(errno), internal_path ? internal_path : ".");
+    char arg0[256];
+    snprintf(arg0, sizeof(arg0), "./%s", bin_name);
+    char *fake_argv[] = { arg0, NULL };
+
+    if (game_main_addr) {
+        typedef int (*game_main_t)(int, char **);
+        game_main_t game_main = (game_main_t)game_main_addr;
+        LOGI("Entering %s main() at %p...", bin_name, game_main);
+        int ret = game_main(1, fake_argv);
+        LOGI("%s main() exited with code %d", bin_name, ret);
+        return ret;
+    } else if (ehdr.e_entry) {
+        /* Stripped binary (no exported main): call _start which invokes override_libc_start_main */
+        LOGI("No exported main(), entering _start at 0x%x...", ehdr.e_entry);
+        uintptr_t entry = ehdr.e_entry;
+        register int r0_res __asm__("r0");
+        __asm__ volatile (
+            "sub sp, sp, #16\n"
+            "mov r1, #1\n"
+            "str r1, [sp, #0]\n"
+            "str %1, [sp, #4]\n"
+            "mov r1, #0\n"
+            "str r1, [sp, #8]\n"
+            "str r1, [sp, #12]\n"
+            "mov r0, #0\n"
+            "blx %2\n"
+            "add sp, sp, #16\n"
+            : "=r"(r0_res)
+            : "r"(arg0), "r"(entry)
+            : "r1", "r2", "r3", "r12", "lr", "memory"
+        );
+        return r0_res;
     }
 
-    typedef int (*game_main_t)(int, char **);
-    game_main_t game_main = (game_main_t)GAME_ENTRY;
-    LOGI("Entering Mainstream main() at %p...", game_main);
-
-    char *game_argv[] = { "mainstream", NULL };
-    int ret = game_main(1, game_argv);
-    LOGI("Game main returned: %d", ret);
-
-    return ret;
+    LOGE("No entry point found in %s", bin_name);
+    return 1;
 }

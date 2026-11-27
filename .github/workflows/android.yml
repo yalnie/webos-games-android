@@ -2,9 +2,9 @@ name: Android CI
 
 on:
   push:
-    branches: [ "mainstream" ]
+    branches: [ "mainstream", "ipk-wrapper" ]
   pull_request:
-    branches: [ "mainstream" ]
+    branches: [ "mainstream", "ipk-wrapper" ]
   workflow_dispatch:
 
 jobs:
