@@ -400,6 +400,62 @@ static int override_basic_file_is_open(void *bf) {
     return s_real_basic_file_is_open ? s_real_basic_file_is_open(bf) : 0;
 }
 
+/* Native Settings::load replacement for games (e.g. gravityball) whose glibc std::ifstream/istringstream ABI differs from bionic gnustl */
+typedef void (*settings_set_int_t)(void *self, const char *key, int val);
+typedef void (*settings_set_str_t)(void *self, const char *key, const char *val_str_obj);
+static settings_set_int_t s_settings_set_int = NULL;
+static settings_set_str_t s_settings_set_str = NULL;
+
+static void override_settings_load(void *self, void *filename_str) {
+    const char *fname = filename_str ? *(const char **)filename_str : "./settings.ini";
+    if (!fname || !*fname) fname = "./settings.ini";
+    FILE *f = fopen(fname, "rb");
+    if (!f) f = fopen("./settings.ini", "rb");
+    if (!f) {
+        LOGW("override_settings_load: failed to open %s", fname);
+        return;
+    }
+
+    typedef void (*str_ctor_t)(void *s, const char *c, void *alloc);
+    typedef void (*str_dtor_t)(void *s);
+    str_ctor_t str_ctor = g_libstdcpp ? (str_ctor_t)dlsym(g_libstdcpp, "_ZNSsC1EPKcRKSaIcE") : NULL;
+    str_dtor_t str_dtor = g_libstdcpp ? (str_dtor_t)dlsym(g_libstdcpp, "_ZNSsD1Ev") : NULL;
+
+    char line[1024];
+    while (fgets(line, sizeof(line), f)) {
+        int type = -1;
+        char key[256] = {0};
+        const char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '\0' || *p == '\r' || *p == '\n' || *p == '#') continue;
+
+        int n = 0;
+        if (sscanf(p, "%d %255s %n", &type, key, &n) < 2) continue;
+        const char *rest = p + n;
+        if (type == 0 && s_settings_set_int) {
+            int val = atoi(rest);
+            s_settings_set_int(self, key, val);
+        } else if (type == 1 && s_settings_set_str && str_ctor && str_dtor) {
+            char valbuf[768] = {0};
+            const char *lbrace = strchr(rest, '{');
+            const char *rbrace = lbrace ? strchr(lbrace + 1, '}') : NULL;
+            if (lbrace && rbrace && (size_t)(rbrace - lbrace - 1) < sizeof(valbuf)) {
+                memcpy(valbuf, lbrace + 1, (size_t)(rbrace - lbrace - 1));
+                valbuf[rbrace - lbrace - 1] = '\0';
+            } else {
+                sscanf(rest, "%767s", valbuf);
+            }
+            char std_str[16] = {0};
+            char dummy_alloc[4] = {0};
+            str_ctor(std_str, valbuf, dummy_alloc);
+            s_settings_set_str(self, key, std_str);
+            str_dtor(std_str);
+        }
+    }
+    fclose(f);
+    LOGI("override_settings_load: loaded %s successfully", fname);
+}
+
 typedef void (*real_string_reserve_t)(void *str, size_t n);
 static real_string_reserve_t s_real_string_reserve = NULL;
 
@@ -1027,16 +1083,38 @@ int SDL_main(int argc, char *argv[]) {
         }
     }
 
-    /* Look up exported 'main' in .dynsym before closing file */
+    /* Look up exported 'main' and optional Settings::load helpers in .dynsym before closing file */
     uintptr_t game_main_addr = 0;
+    uintptr_t settings_load_addr = 0;
+    uintptr_t settings_set_int_addr = 0;
+    uintptr_t settings_set_str_addr = 0;
     if (dynsym && dynstr) {
         for (size_t i = 0; i < dynsym_count; i++) {
             const char *nm = dynstr + dynsym[i].st_name;
-            if (strcmp(nm, "main") == 0 && dynsym[i].st_value != 0) {
+            if (dynsym[i].st_value == 0) continue;
+            if (strcmp(nm, "main") == 0) {
                 game_main_addr = dynsym[i].st_value;
-                break;
+            } else if (strcmp(nm, "_ZN8Settings4loadESs") == 0) {
+                settings_load_addr = dynsym[i].st_value;
+            } else if (strcmp(nm, "_ZN8Settings6setIntEPKci") == 0) {
+                settings_set_int_addr = dynsym[i].st_value;
+            } else if (strcmp(nm, "_ZN8Settings9setStringEPKcSs") == 0) {
+                settings_set_str_addr = dynsym[i].st_value;
             }
         }
+    }
+
+    if (settings_load_addr && settings_set_int_addr && settings_set_str_addr) {
+        s_settings_set_int = (settings_set_int_t)settings_set_int_addr;
+        s_settings_set_str = (settings_set_str_t)settings_set_str_addr;
+        uintptr_t page = settings_load_addr & ~0xFFFU;
+        mprotect((void *)page, 4096, PROT_READ | PROT_WRITE | PROT_EXEC);
+        uint32_t *patch = (uint32_t *)settings_load_addr;
+        patch[0] = 0xe51ff004; /* ldr pc, [pc, #-4] */
+        patch[1] = (uint32_t)(uintptr_t)override_settings_load;
+        __builtin___clear_cache((char *)patch, (char *)(patch + 2));
+        mprotect((void *)page, 4096, PROT_READ | PROT_EXEC);
+        LOGI("Patched Settings::load at 0x%x -> override_settings_load", (unsigned)settings_load_addr);
     }
 
     fclose(f);

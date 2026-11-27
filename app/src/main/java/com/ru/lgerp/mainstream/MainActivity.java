@@ -145,6 +145,10 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
                 }
             }
             f = new File(currentGameDir, rel);
+            if (!f.exists() && !rel.startsWith("assets/")) {
+                File fAssets = new File(currentGameDir, "assets/" + rel);
+                if (fAssets.exists()) f = fAssets;
+            }
         }
         if (!f.exists()) {
             Log.w(TAG, "ndlMediaLoad: file not found: " + rawPath + " (tried " + f.getAbsolutePath() + ")");
