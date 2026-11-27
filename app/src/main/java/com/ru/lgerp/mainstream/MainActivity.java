@@ -66,12 +66,11 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
             gameMain = "mainstream";
         }
 
-        // Ensure libraries are loaded before calling nativeSetGameConfig
         currentGameDir = gameDir;
-        loadLibraries();
-        nativeSetGameConfig(gameDir, gameMain, gameW, gameH);
-
         super.onCreate(savedInstanceState);
+        if (!mBrokenLibraries) {
+            nativeSetGameConfig(gameDir, gameMain, gameW, gameH);
+        }
 
         // Keep screen on while playing
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -154,8 +153,15 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
         try {
             ndlMediaUnload();
             MediaPlayer mp = new MediaPlayer();
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                mp.setAudioAttributes(new android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_GAME)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build());
+            }
             mp.setDataSource(f.getAbsolutePath());
             mp.setLooping(true);
+            mp.setVolume(1.0f, 1.0f);
             mp.prepare();
             mp.start();
             ndlMediaPlayer = mp;

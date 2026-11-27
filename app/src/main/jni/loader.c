@@ -320,6 +320,86 @@ static void override_basic_ios_init(void *ios, void *sb) {
     }
 }
 
+/* Bridge glibc vs bionic std::basic_filebuf<char> _M_file offset mismatch */
+static pthread_mutex_t s_fb_mutex = PTHREAD_MUTEX_INITIALIZER;
+static void *s_open_filebufs[32] = {0};
+
+static void track_open_filebuf(void *fb) {
+    pthread_mutex_lock(&s_fb_mutex);
+    for (int i = 0; i < 32; i++) {
+        if (s_open_filebufs[i] == fb) { pthread_mutex_unlock(&s_fb_mutex); return; }
+    }
+    for (int i = 0; i < 32; i++) {
+        if (!s_open_filebufs[i]) { s_open_filebufs[i] = fb; break; }
+    }
+    pthread_mutex_unlock(&s_fb_mutex);
+}
+
+static void untrack_open_filebuf(void *fb) {
+    pthread_mutex_lock(&s_fb_mutex);
+    for (int i = 0; i < 32; i++) {
+        if (s_open_filebufs[i] == fb) s_open_filebufs[i] = NULL;
+    }
+    pthread_mutex_unlock(&s_fb_mutex);
+}
+
+static int is_tracked_filebuf_member(void *bf) {
+    pthread_mutex_lock(&s_fb_mutex);
+    for (int i = 0; i < 32; i++) {
+        if (s_open_filebufs[i]) {
+            uintptr_t fb = (uintptr_t)s_open_filebufs[i];
+            uintptr_t p = (uintptr_t)bf;
+            if (p >= fb && p < fb + 128) {
+                pthread_mutex_unlock(&s_fb_mutex);
+                return 1;
+            }
+        }
+    }
+    pthread_mutex_unlock(&s_fb_mutex);
+    return 0;
+}
+
+typedef void *(*real_filebuf_open_t)(void *fb, const char *s, int mode);
+static real_filebuf_open_t s_real_filebuf_open = NULL;
+static void *override_filebuf_open(void *fb, const char *s, int mode) {
+    if (!s_real_filebuf_open && g_libstdcpp) {
+        s_real_filebuf_open = (real_filebuf_open_t)dlsym(g_libstdcpp, "_ZNSt13basic_filebufIcSt11char_traitsIcEE4openEPKcSt13_Ios_Openmode");
+    }
+    void *res = s_real_filebuf_open ? s_real_filebuf_open(fb, s, mode) : NULL;
+    if (res) track_open_filebuf(fb);
+    return res;
+}
+
+typedef void *(*real_filebuf_close_t)(void *fb);
+static real_filebuf_close_t s_real_filebuf_close = NULL;
+static void *override_filebuf_close(void *fb) {
+    untrack_open_filebuf(fb);
+    if (!s_real_filebuf_close && g_libstdcpp) {
+        s_real_filebuf_close = (real_filebuf_close_t)dlsym(g_libstdcpp, "_ZNSt13basic_filebufIcSt11char_traitsIcEE5closeEv");
+    }
+    return s_real_filebuf_close ? s_real_filebuf_close(fb) : NULL;
+}
+
+typedef void (*real_filebuf_dtor_t)(void *fb);
+static real_filebuf_dtor_t s_real_filebuf_dtor = NULL;
+static void override_filebuf_dtor(void *fb) {
+    untrack_open_filebuf(fb);
+    if (!s_real_filebuf_dtor && g_libstdcpp) {
+        s_real_filebuf_dtor = (real_filebuf_dtor_t)dlsym(g_libstdcpp, "_ZNSt13basic_filebufIcSt11char_traitsIcEED1Ev");
+    }
+    if (s_real_filebuf_dtor) s_real_filebuf_dtor(fb);
+}
+
+typedef int (*real_basic_file_is_open_t)(void *bf);
+static real_basic_file_is_open_t s_real_basic_file_is_open = NULL;
+static int override_basic_file_is_open(void *bf) {
+    if (is_tracked_filebuf_member(bf)) return 1;
+    if (!s_real_basic_file_is_open && g_libstdcpp) {
+        s_real_basic_file_is_open = (real_basic_file_is_open_t)dlsym(g_libstdcpp, "_ZNKSt12__basic_fileIcE7is_openEv");
+    }
+    return s_real_basic_file_is_open ? s_real_basic_file_is_open(bf) : 0;
+}
+
 typedef void (*real_string_reserve_t)(void *str, size_t n);
 static real_string_reserve_t s_real_string_reserve = NULL;
 
@@ -678,6 +758,10 @@ static const struct SymbolOverride g_overrides[] = {
     { "_ITM_deregisterTMCloneTable", NULL },
     { "_ITM_registerTMCloneTable", NULL },
     { "_ZNSt9basic_iosIcSt11char_traitsIcEE4initEPSt15basic_streambufIcS1_E", (void *)override_basic_ios_init },
+    { "_ZNSt13basic_filebufIcSt11char_traitsIcEE4openEPKcSt13_Ios_Openmode", (void *)override_filebuf_open },
+    { "_ZNSt13basic_filebufIcSt11char_traitsIcEE5closeEv", (void *)override_filebuf_close },
+    { "_ZNSt13basic_filebufIcSt11char_traitsIcEED1Ev", (void *)override_filebuf_dtor },
+    { "_ZNKSt12__basic_fileIcE7is_openEv", (void *)override_basic_file_is_open },
     { "_ZNSs7reserveEj", (void *)override_string_reserve },
     { "_ZNSs9_M_mutateEjjj", (void *)override_string_mutate },
     { "_ZNSs6assignEPKcj", (void *)override_string_assign_cstr },
