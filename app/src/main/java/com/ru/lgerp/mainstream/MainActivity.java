@@ -62,12 +62,30 @@ public class MainActivity extends SDLActivity {
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
-        if (event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
-            if (event.getAction() == KeyEvent.ACTION_DOWN) {
-                SDLActivity.onNativeKeyDown(KeyEvent.KEYCODE_BACK);
-            } else if (event.getAction() == KeyEvent.ACTION_UP) {
-                SDLActivity.onNativeKeyUp(KeyEvent.KEYCODE_BACK);
+        int keyCode = event.getKeyCode();
+        // Let Android handle system volume / power keys normally
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
+            keyCode == KeyEvent.KEYCODE_VOLUME_DOWN ||
+            keyCode == KeyEvent.KEYCODE_VOLUME_MUTE ||
+            keyCode == KeyEvent.KEYCODE_POWER) {
+            return super.dispatchKeyEvent(event);
+        }
+
+        // Map gamepad A/B to Enter/Back so controllers & TV remotes work uniformly
+        int mappedCode = keyCode;
+        if (keyCode == KeyEvent.KEYCODE_BUTTON_A) {
+            mappedCode = KeyEvent.KEYCODE_ENTER;
+        } else if (keyCode == KeyEvent.KEYCODE_BUTTON_B) {
+            mappedCode = KeyEvent.KEYCODE_BACK;
+        }
+
+        if (event.getAction() == KeyEvent.ACTION_DOWN) {
+            if (event.getRepeatCount() == 0) {
+                SDLActivity.onNativeKeyDown(mappedCode);
             }
+            return true;
+        } else if (event.getAction() == KeyEvent.ACTION_UP) {
+            SDLActivity.onNativeKeyUp(mappedCode);
             return true;
         }
         return super.dispatchKeyEvent(event);

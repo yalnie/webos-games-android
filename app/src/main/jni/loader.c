@@ -268,25 +268,33 @@ static int override_SDL_PollEvent(SDL_Event *event) {
         Uint32 scancode = (Uint32)modern.keysym.scancode;
         Uint32 sym = (Uint32)modern.keysym.sym;
 
-        /* Map Back / Escape keys */
-        if (sym == SDLK_AC_BACK || scancode == SDL_SCANCODE_AC_BACK || sym == SDLK_ESCAPE) {
-            LOGI("Mapping Back key event to SDLK_ESCAPE / SDL_SCANCODE_WEBOS_TV_BACK");
+        /* Map Back / Escape / Backspace keys */
+        if (sym == SDLK_AC_BACK || scancode == SDL_SCANCODE_AC_BACK ||
+            sym == SDLK_ESCAPE || sym == SDLK_BACKSPACE) {
+            LOGI("Mapping Back/Escape key event to SDLK_ESCAPE / SDL_SCANCODE_WEBOS_TV_BACK");
             scancode = 482; // SDL_SCANCODE_WEBOS_TV_BACK
             sym = 27;       // SDLK_ESCAPE
         }
-        /* Map Enter / Select / DPAD_CENTER */
-        else if (sym == SDLK_RETURN || sym == SDLK_KP_ENTER || sym == SDLK_SELECT) {
+        /* Map Enter / Select / DPAD_CENTER / Space */
+        else if (sym == SDLK_RETURN || sym == SDLK_KP_ENTER ||
+                 sym == SDLK_SELECT || sym == SDLK_SPACE) {
             sym = 13;       // SDLK_RETURN
         }
-        /* Map DPAD navigation */
-        else if (sym == SDLK_UP) {
+        /* Map DPAD navigation and WASD */
+        else if (sym == SDLK_UP || sym == SDLK_w) {
             sym = 1073741906;
-        } else if (sym == SDLK_DOWN) {
+        } else if (sym == SDLK_DOWN || sym == SDLK_s) {
             sym = 1073741905;
-        } else if (sym == SDLK_LEFT) {
+        } else if (sym == SDLK_LEFT || sym == SDLK_a) {
             sym = 1073741904;
-        } else if (sym == SDLK_RIGHT) {
+        } else if (sym == SDLK_RIGHT || sym == SDLK_d) {
             sym = 1073741903;
+        }
+        /* Map Numpad 0..9 to ASCII '0'..'9' */
+        else if (sym == SDLK_KP_0) {
+            sym = '0';
+        } else if (sym >= SDLK_KP_1 && sym <= SDLK_KP_9) {
+            sym = '1' + (sym - SDLK_KP_1);
         }
 
         webos_key->type = modern.type;
