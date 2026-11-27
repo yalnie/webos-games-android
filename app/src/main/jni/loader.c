@@ -338,6 +338,26 @@ static int override_SDL_PollEvent(SDL_Event *event) {
     return res;
 }
 
+static int override_xstat(int ver, const char *path, struct stat *buf) {
+    return stat(path, buf);
+}
+
+static int (*g_captured_main)(int, char **, char **) = NULL;
+static int override_libc_start_main(
+        int (*main_fn)(int, char **, char **),
+        int argc, char **ubp_av,
+        void (*init)(void), void (*fini)(void),
+        void (*rtld_fini)(void), void *stack_end) {
+    g_captured_main = main_fn;
+    LOGI("Captured main_fn=%p via __libc_start_main!", main_fn);
+    if (init) init();
+    if (main_fn) {
+        extern char **environ;
+        return main_fn(argc, ubp_av, environ);
+    }
+    return 0;
+}
+
 static const struct SymbolOverride g_overrides[] = {
     /* NDL */
     { "NDL_ServiceInit", (void *)NDL_ServiceInit },
@@ -398,26 +418,6 @@ static const struct SymbolOverride g_overrides[] = {
     { "json_object_array_length", (void *)json_object_array_length },
     { "json_object_get_double", (void *)json_object_get_double },
     { "json_object_get_type", (void *)json_object_get_type },
-
-static int override_xstat(int ver, const char *path, struct stat *buf) {
-    return stat(path, buf);
-}
-
-static int (*g_captured_main)(int, char **, char **) = NULL;
-static int override_libc_start_main(
-        int (*main_fn)(int, char **, char **),
-        int argc, char **ubp_av,
-        void (*init)(void), void (*fini)(void),
-        void (*rtld_fini)(void), void *stack_end) {
-    g_captured_main = main_fn;
-    LOGI("Captured main_fn=%p via __libc_start_main!", main_fn);
-    if (init) init();
-    if (main_fn) {
-        extern char **environ;
-        return main_fn(argc, ubp_av, environ);
-    }
-    return 0;
-}
 
     /* Libc / Math / C++ overrides */
     { "fopen", (void *)override_fopen },
