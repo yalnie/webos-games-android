@@ -438,6 +438,8 @@ int SDL_main(int argc, char *argv[]) {
 
     /* Force Android AudioTrack driver (avoids AAudio MMAP/low-latency crackling) */
     SDL_SetHint("SDL_AUDIODRIVER", "android");
+    /* Disable touch-to-mouse synthesis (keep real mouse input enabled) */
+    SDL_SetHint("SDL_TOUCH_MOUSE_EVENTS", "0");
 
     /* 2. Open binary */
     FILE *f = fopen("mainstream", "rb");
