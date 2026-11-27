@@ -11,8 +11,6 @@ set(SDL_SHARED ON CACHE BOOL "Build shared SDL library" FORCE)
 set(SDL_STATIC OFF CACHE BOOL "Build static SDL library" FORCE)
 set(SDL_TEST OFF CACHE BOOL "Build SDL tests" FORCE)
 set(SDL_SENSOR OFF CACHE BOOL "Disable SDL sensor" FORCE)
-set(SDL_OPENSLES ON CACHE BOOL "" FORCE)
-set(SDL_AAUDIO ON CACHE BOOL "" FORCE)
 
 FetchContent_Declare(
     SDL2
@@ -76,7 +74,6 @@ target_link_libraries(mainstream_loader
     png_shared
     GLESv2
     EGL
-    OpenSLES
     log
     android
     z

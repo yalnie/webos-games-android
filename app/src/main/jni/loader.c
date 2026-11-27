@@ -14,7 +14,6 @@
 #include <GLES2/gl2.h>
 
 #include "SDL.h"
-#include "SDL_mixer.h"
 #include "webos_bridge.h"
 
 #define TAG "MainstreamLoader"
@@ -133,23 +132,6 @@ static FILE *override_fopen(const char *filename, const char *mode) {
         }
     }
     return f;
-}
-
-static int override_Mix_OpenAudio(int frequency, uint16_t format, int channels, int chunksize) {
-    LOGI("Mix_OpenAudio requested: freq=%d, format=0x%x, channels=%d, chunksize=%d",
-         frequency, format, channels, chunksize);
-    /* Enforce 48000 Hz native Android frequency with 2048 sample buffer */
-    return Mix_OpenAudio(48000, format, channels, 2048);
-}
-
-static int override_SDL_OpenAudio(SDL_AudioSpec *desired, SDL_AudioSpec *obtained) {
-    if (desired) {
-        LOGI("SDL_OpenAudio requested: freq=%d, format=0x%x, channels=%d, samples=%d",
-             desired->freq, desired->format, desired->channels, desired->samples);
-        desired->freq = 48000;
-        desired->samples = 2048;
-    }
-    return SDL_OpenAudio(desired, obtained);
 }
 
 static int s_screen_w = 0;
@@ -377,9 +359,7 @@ static const struct SymbolOverride g_overrides[] = {
     { "_ZNSt9basic_iosIcSt11char_traitsIcEE4initEPSt15basic_streambufIcS1_E", (void *)override_basic_ios_init },
     { "_ZNSs7reserveEj", (void *)override_string_reserve },
 
-    /* SDL / Audio / Display overrides */
-    { "Mix_OpenAudio", (void *)override_Mix_OpenAudio },
-    { "SDL_OpenAudio", (void *)override_SDL_OpenAudio },
+    /* SDL / Display overrides */
     { "glViewport", (void *)override_glViewport },
     { "glScissor", (void *)override_glScissor },
     { "SDL_PollEvent", (void *)override_SDL_PollEvent },
@@ -447,9 +427,6 @@ int SDL_main(int argc, char *argv[]) {
             LOGW("chdir(%s) failed: %s", internal_path, strerror(errno));
         }
     }
-
-    /* Audio hints */
-    SDL_SetHint("SDL_AUDIO_RESAMPLING_MODE", "medium");
 
     /* 2. Open binary */
     FILE *f = fopen("mainstream", "rb");
