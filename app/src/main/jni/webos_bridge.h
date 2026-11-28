@@ -105,6 +105,9 @@ int LGNC_eglDestroySurface(void *dpy, void *surface);
 int LGNC_eglDestroyContext(void *dpy, void *ctx);
 int LGNC_eglTerminate(void *dpy);
 int LGNC_eglGetError(void);
+const char *LGNC_eglQueryString(void *dpy, int name);
+int LGNC_eglBindAPI(int api);
+int LGNC_eglTrue(void);
 
 /* Virtual V4L2 Camera (/dev/video0 -> Android Camera) */
 void webos_update_camera_frame(const unsigned char *nv21, int w, int h);

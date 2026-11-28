@@ -374,7 +374,13 @@ static void *override_getline(void *is, void *str, char delim) {
     if (!s_real_getline && g_libstdcpp) {
         s_real_getline = (real_getline_t)dlsym(g_libstdcpp, "_ZSt7getlineIcSt11char_traitsIcESaIcEERSt13basic_istreamIT_T0_ES7_RSbIS4_S5_T1_ES4_");
     }
-    return s_real_getline ? s_real_getline(is, str, delim) : is;
+    void *ret = s_real_getline ? s_real_getline(is, str, delim) : is;
+    if (ret) {
+        int voff = *(int *)(*(void **)ret - 12);
+        int state = *(int *)((char *)ret + voff + 20);
+        if ((state & 5) == 4) LOGW("override_getline: failbit set (is=%p state=0x%x)", is, state);
+    }
+    return ret;
 }
 
 typedef void *(*real_istream_extract_str_t)(void *is, void *str);
@@ -927,6 +933,28 @@ static int log_Mix_VolumeMusic(int vol) {
 static int g_daylight = 0;
 static char *g_tzname[2] = { "UTC", "UTC" };
 
+static const struct SymbolOverride g_overrides[];
+
+static void *override_dlsym(void *handle, const char *symbol) {
+    if (symbol) {
+        for (int i = 0; g_overrides[i].name != NULL; i++) {
+            if (strcmp(symbol, g_overrides[i].name) == 0 && g_overrides[i].addr) {
+                return g_overrides[i].addr;
+            }
+        }
+        if (strncmp(symbol, "egl", 3) == 0) {
+            char lgnc_name[128];
+            snprintf(lgnc_name, sizeof(lgnc_name), "LGNC_%s", symbol);
+            for (int i = 0; g_overrides[i].name != NULL; i++) {
+                if (strcmp(lgnc_name, g_overrides[i].name) == 0 && g_overrides[i].addr) {
+                    return g_overrides[i].addr;
+                }
+            }
+        }
+    }
+    return dlsym(handle, symbol);
+}
+
 static int (*g_captured_main)(int, char **, char **) = NULL;
 static int override_libc_start_main(
         int (*main_fn)(int, char **, char **),
@@ -1043,6 +1071,11 @@ static const struct SymbolOverride g_overrides[] = {
     { "LGNC_eglDestroyContext", (void *)LGNC_eglDestroyContext },
     { "LGNC_eglTerminate", (void *)LGNC_eglTerminate },
     { "LGNC_eglGetError", (void *)LGNC_eglGetError },
+    { "LGNC_eglQueryString", (void *)LGNC_eglQueryString },
+    { "LGNC_eglBindAPI", (void *)LGNC_eglBindAPI },
+    { "LGNC_eglWaitClient", (void *)LGNC_eglTrue },
+    { "LGNC_eglReleaseThread", (void *)LGNC_eglTrue },
+    { "LGNC_eglSurfaceAttrib", (void *)LGNC_eglTrue },
 
     /* GLib Base64 */
     { "g_base64_encode", (void *)g_base64_encode },
@@ -1095,6 +1128,7 @@ static const struct SymbolOverride g_overrides[] = {
     { "__xstat", (void *)override_xstat },
     { "__libc_start_main", (void *)override_libc_start_main },
     { "__pthread_key_create", (void *)pthread_key_create },
+    { "dlsym", (void *)override_dlsym },
     { "pthread_yield", (void *)sched_yield },
     { "__daylight", (void *)&g_daylight },
     { "__tzname", (void *)g_tzname },

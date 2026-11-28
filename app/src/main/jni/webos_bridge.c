@@ -591,6 +591,7 @@ int LGNC_eglQuerySurface(void *dpy, void *surface, int attribute, int *value) {
 }
 
 int LGNC_eglSwapBuffers(void *dpy, void *surface) {
+    SDL_PumpEvents();
     if (s_lgnc_window) SDL_GL_SwapWindow(s_lgnc_window);
     return 1;
 }
@@ -604,6 +605,9 @@ int LGNC_eglDestroySurface(void *dpy, void *surface) { return 1; }
 int LGNC_eglDestroyContext(void *dpy, void *ctx) { return 1; }
 int LGNC_eglTerminate(void *dpy) { return 1; }
 int LGNC_eglGetError(void) { return 0x3000; /* EGL_SUCCESS */ }
+const char *LGNC_eglQueryString(void *dpy, int name) { return ""; }
+int LGNC_eglBindAPI(int api) { return 1; }
+int LGNC_eglTrue(void) { return 1; }
 
 /* Virtual V4L2 Camera (/dev/video0 -> Android Camera) */
 #define V4L2_FAKE_FD 0x70001001
@@ -765,9 +769,16 @@ int v4l2_ioctl(int fd, unsigned long request, ...) {
         case VIDIOC_REQBUFS: {
             struct v4l2_requestbuffers *req = (struct v4l2_requestbuffers *)arg;
             if (!req) { errno = EINVAL; return -1; }
-            if (req->count > 1) req->count = 1;
+            if (req->count < 2) req->count = 2;
+            if (req->count > 8) req->count = 8;
             return 0;
         }
+        case 0x4014563C: /* VIDIOC_S_CROP */
+        case 0xC008561C: /* VIDIOC_S_CTRL */
+            return 0;
+        case 0xC0445624: /* VIDIOC_QUERYCTRL */
+            errno = EINVAL;
+            return -1;
         case VIDIOC_QUERYBUF: {
             struct v4l2_buffer *buf = (struct v4l2_buffer *)arg;
             if (!buf) { errno = EINVAL; return -1; }
@@ -809,6 +820,7 @@ int v4l2_ioctl(int fd, unsigned long request, ...) {
             jni_call_camera("stopV4L2Camera", 0, 0);
             return 0;
         default:
+            LOGW("v4l2_ioctl: unhandled request=0x%lx", request);
             errno = EINVAL;
             return -1;
     }

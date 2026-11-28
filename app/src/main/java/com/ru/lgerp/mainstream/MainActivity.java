@@ -46,6 +46,7 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
     private static int sCamW = 640;
     private static int sCamH = 480;
     private static MediaPlayer ndlMediaPlayer;
+    private static boolean ndlPausedByLifecycle = false;
     private static String currentGameDir = "";
 
     private SensorManager sensorManager;
@@ -113,6 +114,12 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
     @Override
     protected void onResume() {
         super.onResume();
+        try {
+            if (ndlPausedByLifecycle && ndlMediaPlayer != null) {
+                ndlMediaPlayer.start();
+                ndlPausedByLifecycle = false;
+            }
+        } catch (Exception ignored) {}
         if (sensorManager != null) {
             Sensor gyro = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
             Sensor accel = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
@@ -125,6 +132,12 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
 
     @Override
     protected void onPause() {
+        try {
+            if (ndlMediaPlayer != null && ndlMediaPlayer.isPlaying()) {
+                ndlMediaPlayer.pause();
+                ndlPausedByLifecycle = true;
+            }
+        } catch (Exception ignored) {}
         if (sensorManager != null) {
             sensorManager.unregisterListener(this);
         }
