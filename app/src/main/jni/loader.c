@@ -156,6 +156,67 @@ static int *override_errno_location(void) {
     return &errno;
 }
 
+/* Glibc ctype locale tables for __ctype_toupper_loc / __ctype_tolower_loc / __ctype_b_loc */
+static int32_t s_toupper_tab[384];
+static int32_t s_tolower_tab[384];
+static uint16_t s_ctype_b_tab[384];
+static int s_ctype_init = 0;
+
+static void ensure_ctype_tables(void) {
+    if (s_ctype_init) return;
+    for (int i = -128; i < 256; i++) {
+        int idx = i + 128;
+        int c = (i >= 0) ? i : (i & 0xFF);
+        s_toupper_tab[idx] = (i >= 'a' && i <= 'z') ? (i - 32) : i;
+        s_tolower_tab[idx] = (i >= 'A' && i <= 'Z') ? (i + 32) : i;
+        uint16_t mask = 0;
+        if (i >= 'A' && i <= 'Z') mask |= (1 << 8) | (1 << 10) | (1 << 14); /* upper, alpha, print */
+        if (i >= 'a' && i <= 'z') mask |= (1 << 9) | (1 << 10) | (1 << 14); /* lower, alpha, print */
+        if (i >= '0' && i <= '9') mask |= (1 << 11) | (1 << 12) | (1 << 14); /* digit, xdigit, print */
+        if ((i >= 'A' && i <= 'F') || (i >= 'a' && i <= 'f')) mask |= (1 << 12);
+        if (i == ' ' || i == '\t' || i == '\n' || i == '\r' || i == '\v' || i == '\f') mask |= (1 << 13);
+        if (i >= 0x20 && i < 0x7F) mask |= (1 << 14);
+        if (i >= 0 && i < 0x20) mask |= (1 << 1); /* cntrl */
+        if (i > 0x20 && i < 0x7F && !(mask & ((1 << 10) | (1 << 11)))) mask |= (1 << 2); /* punct */
+        (void)c;
+        s_ctype_b_tab[idx] = mask;
+    }
+    s_ctype_init = 1;
+}
+
+static const int32_t **override_ctype_toupper_loc(void) {
+    ensure_ctype_tables();
+    static const int32_t *ptr = s_toupper_tab + 128;
+    return &ptr;
+}
+
+static const int32_t **override_ctype_tolower_loc(void) {
+    ensure_ctype_tables();
+    static const int32_t *ptr = s_tolower_tab + 128;
+    return &ptr;
+}
+
+static const uint16_t **override_ctype_b_loc(void) {
+    ensure_ctype_tables();
+    static const uint16_t *ptr = s_ctype_b_tab + 128;
+    return &ptr;
+}
+
+static void stub_uuid_generate(uint8_t out[16]) {
+    if (!out) return;
+    for (int i = 0; i < 16; i++) out[i] = (uint8_t)(rand() & 0xFF);
+    out[6] = (out[6] & 0x0F) | 0x40;
+    out[8] = (out[8] & 0x3F) | 0x80;
+}
+
+static void stub_uuid_unparse(const uint8_t uu[16], char *out) {
+    if (!uu || !out) return;
+    snprintf(out, 37,
+             "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+             uu[0], uu[1], uu[2], uu[3], uu[4], uu[5], uu[6], uu[7],
+             uu[8], uu[9], uu[10], uu[11], uu[12], uu[13], uu[14], uu[15]);
+}
+
 static void fix_empty_rep(void *str) {
     if (str && g_app_empty_rep && g_libstdcpp_empty_rep) {
         char *p = *(char **)str;
@@ -926,6 +987,11 @@ static const struct SymbolOverride g_overrides[] = {
     { "free", (void *)safe_free },
     { "ftime", (void *)ftime },
     { "__errno_location", (void *)override_errno_location },
+    { "__ctype_toupper_loc", (void *)override_ctype_toupper_loc },
+    { "__ctype_tolower_loc", (void *)override_ctype_tolower_loc },
+    { "__ctype_b_loc", (void *)override_ctype_b_loc },
+    { "uuid_generate", (void *)stub_uuid_generate },
+    { "uuid_unparse", (void *)stub_uuid_unparse },
     { "__strdup", (void *)strdup },
     { "__xstat", (void *)override_xstat },
     { "__libc_start_main", (void *)override_libc_start_main },
