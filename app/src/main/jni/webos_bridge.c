@@ -359,23 +359,33 @@ static int s_lgnc_h = 1080;
 
 int LGNC_SYSTEM_Initialize(int argc, char **argv, void *cb) { return 0; }
 int LGNC_SYSTEM_Finalize(void) { return 0; }
-const char *LGNC_SYSTEM_GetLanguage(void) { return "en"; }
-const char *LGNC_SYSTEM_GetSaveDirectory(void) { return "."; }
+int LGNC_SYSTEM_GetLanguage(char *out) { if (out) strcpy(out, "en"); return 0; }
+int LGNC_SYSTEM_GetSaveDirectory(char *out) { if (out) strcpy(out, "."); return 0; }
 int LGNC_SYSTEM_SetResolution(int w, int h) {
     if (w > 0) s_lgnc_w = w;
     if (h > 0) s_lgnc_h = h;
     return 0;
 }
-int LGNC_SYSTEM_GetDisplayId(void) { return 0; }
+int LGNC_SYSTEM_GetDisplayId(int *out) { if (out) *out = 0; return 0; }
+int LGNC_SYSTEM_GetDisplayResolution(int *w, int *h) {
+    if (w) *w = s_lgnc_w;
+    if (h) *h = s_lgnc_h;
+    return 0;
+}
+int LGNC_SYSTEM_GetCursorPosition(short *x, short *y) {
+    if (x) *x = (short)s_ptr_x;
+    if (y) *y = (short)s_ptr_y;
+    return 0;
+}
 int LGNC_SYSTEM_SetCursorShape(int shape, int x, int y) { return 0; }
 int LGNC_SYSTEM_SetCustomCursor(void *data, int w, int h, int hx, int hy) { return 0; }
 int LGNC_S3D_GetGraphicMode(void *mode) { return 0; }
 int LGNC_S3D_SetAllMode(int mode) { return 0; }
-int LGNC_MEDIA_Initialize(void) { return 0; }
+int LGNC_MEDIA_Initialize(void *cb, int *handle) { if (handle) *handle = 1; return 0; }
 int LGNC_MEDIA_Finalize(void) { return NDL_MediaUnload(); }
-int LGNC_MEDIA_PlayFile(const char *path, int loop) { return NDL_MediaLoad(path, NULL); }
-int LGNC_MEDIA_PlayBuffer(const void *buf, int size, int loop) { return 0; }
-int LGNC_MEDIA_Stop(void) { return NDL_MediaUnload(); }
+int LGNC_MEDIA_PlayFile(int handle, const char *path, int loop) { return NDL_MediaLoad(path, NULL); }
+int LGNC_MEDIA_PlayBuffer(unsigned int handle, const void *buf, size_t size) { return 0; }
+int LGNC_MEDIA_Stop(unsigned int handle) { return NDL_MediaUnload(); }
 
 void *LGNC_eglGetDisplay(void *native_display) {
     if (!(SDL_WasInit(SDL_INIT_VIDEO) & SDL_INIT_VIDEO)) {

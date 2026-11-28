@@ -21,6 +21,8 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.zip.GZIPInputStream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 public class IpkInstaller {
     private static final String TAG = "IpkInstaller";
@@ -104,13 +106,18 @@ public class IpkInstaller {
                 extractDataFromAr(bis, staging);
             } else if (n >= 2 && (magic[0] & 0xFF) == 0x1F && (magic[1] & 0xFF) == 0x8B) {
                 extractTar(new GZIPInputStream(bis), staging);
+            } else if (n >= 4 && magic[0] == 'P' && magic[1] == 'K' && magic[2] == 3 && magic[3] == 4) {
+                extractZip(bis, staging);
             } else {
-                throw new IOException("Unsupported IPK format (expected ar archive)");
+                throw new IOException("Unsupported archive format (expected .ipk, .tar.gz, or .zip)");
             }
 
             File appDir = findAppDir(staging);
             if (appDir == null) {
-                throw new IOException("appinfo.json not found inside IPK");
+                appDir = findNetCastAppDirAndSynthesize(staging);
+            }
+            if (appDir == null) {
+                throw new IOException("appinfo.json or NetCast ELF binary not found inside archive");
             }
             File appInfoFile = new File(appDir, "appinfo.json");
             GameEntry parsed = parseAppInfo(appDir, appInfoFile);
@@ -261,6 +268,88 @@ public class IpkInstaller {
                 skipTarPadding(in, size);
             }
         }
+    }
+
+    private static void extractZip(InputStream in, File destDir) throws IOException {
+        byte[] copyBuf = new byte[32768];
+        String canonicalDest = destDir.getCanonicalPath();
+        try (ZipInputStream zis = new ZipInputStream(in)) {
+            ZipEntry entry;
+            while ((entry = zis.getNextEntry()) != null) {
+                String clean = normalizeTarPath(entry.getName());
+                if (clean.isEmpty()) continue;
+                File outFile = new File(destDir, clean);
+                String canonicalOut = outFile.getCanonicalPath();
+                if (!canonicalOut.startsWith(canonicalDest + File.separator) && !canonicalOut.equals(canonicalDest)) {
+                    throw new IOException("Blocked path traversal in zip: " + entry.getName());
+                }
+                if (entry.isDirectory()) {
+                    outFile.mkdirs();
+                } else {
+                    File parent = outFile.getParentFile();
+                    if (parent != null && !parent.exists()) parent.mkdirs();
+                    try (FileOutputStream fos = new FileOutputStream(outFile)) {
+                        int r;
+                        while ((r = zis.read(copyBuf)) > 0) {
+                            fos.write(copyBuf, 0, r);
+                        }
+                    }
+                    outFile.setExecutable(true, false);
+                }
+                zis.closeEntry();
+            }
+        }
+    }
+
+    private static boolean isElfBinary(File f) {
+        if (!f.isFile() || f.length() < 52) return false;
+        try (FileInputStream fis = new FileInputStream(f)) {
+            byte[] hdr = new byte[4];
+            if (fis.read(hdr) != 4) return false;
+            return hdr[0] == 0x7F && hdr[1] == 'E' && hdr[2] == 'L' && hdr[3] == 'F';
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static File findNetCastAppDirAndSynthesize(File root) {
+        File[] files = root.listFiles();
+        if (files == null) return null;
+        File elfFile = null;
+        File iconFile = null;
+        for (File f : files) {
+            if (f.isFile() && !f.getName().endsWith(".so") && isElfBinary(f)) {
+                elfFile = f;
+            } else if (f.isFile() && f.getName().toLowerCase().endsWith(".png")) {
+                if (iconFile == null || f.getName().contains("130")) {
+                    iconFile = f;
+                }
+            }
+        }
+        if (elfFile != null) {
+            try {
+                JSONObject obj = new JSONObject();
+                String name = elfFile.getName();
+                obj.put("id", "netcast." + sanitizeId(name));
+                obj.put("title", name);
+                obj.put("main", name);
+                if (iconFile != null) obj.put("icon", iconFile.getName());
+                obj.put("resolution", "1920x1080");
+                try (FileOutputStream fos = new FileOutputStream(new File(root, "appinfo.json"))) {
+                    fos.write(obj.toString(2).getBytes(StandardCharsets.UTF_8));
+                }
+                return root;
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to synthesize appinfo.json", e);
+            }
+        }
+        for (File f : files) {
+            if (f.isDirectory()) {
+                File found = findNetCastAppDirAndSynthesize(f);
+                if (found != null) return found;
+            }
+        }
+        return null;
     }
 
     private static File findAppDir(File root) {

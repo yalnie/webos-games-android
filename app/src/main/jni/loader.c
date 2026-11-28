@@ -955,6 +955,8 @@ static const struct SymbolOverride g_overrides[] = {
     { "LGNC_SYSTEM_GetSaveDirectory", (void *)LGNC_SYSTEM_GetSaveDirectory },
     { "LGNC_SYSTEM_SetResolution", (void *)LGNC_SYSTEM_SetResolution },
     { "LGNC_SYSTEM_GetDisplayId", (void *)LGNC_SYSTEM_GetDisplayId },
+    { "LGNC_SYSTEM_GetDisplayResolution", (void *)LGNC_SYSTEM_GetDisplayResolution },
+    { "LGNC_SYSTEM_GetCursorPosition", (void *)LGNC_SYSTEM_GetCursorPosition },
     { "LGNC_SYSTEM_SetCursorShape", (void *)LGNC_SYSTEM_SetCursorShape },
     { "LGNC_SYSTEM_SetCustomCursor", (void *)LGNC_SYSTEM_SetCustomCursor },
     { "LGNC_S3D_GetGraphicMode", (void *)LGNC_S3D_GetGraphicMode },
