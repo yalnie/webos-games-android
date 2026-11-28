@@ -372,6 +372,7 @@ int NDL_MediaLoad(const char *mediaInfo, void *cb) {
         }
         (*env)->DeleteLocalRef(env, cls);
     }
+    LOGI("NDL_MediaLoad(%s -> %s) -> %d", mediaInfo, path_buf, res);
     return res;
 }
 
@@ -464,13 +465,31 @@ int LGNC_SYSTEM_GetCursorPosition(short *x, short *y) {
 }
 int LGNC_SYSTEM_SetCursorShape(int shape, int x, int y) { return 0; }
 int LGNC_SYSTEM_SetCustomCursor(void *data, int w, int h, int hx, int hy) { return 0; }
+int LGNC_SYSTEM_GetVolume(int *vol) { if (vol) *vol = 50; return 0; }
+int LGNC_SYSTEM_SetVolume(int vol) { return 0; }
+int LGNC_SYSTEM_GetMute(int *mute) { if (mute) *mute = 0; return 0; }
+int LGNC_SYSTEM_SetMute(int mute) { return 0; }
 int LGNC_S3D_GetGraphicMode(void *mode) { return 0; }
+int LGNC_S3D_GetVideoMode(void *mode) { return 0; }
+int LGNC_S3D_SetVideoModeOnly(int mode) { return 0; }
 int LGNC_S3D_SetAllMode(int mode) { return 0; }
 int LGNC_MEDIA_Initialize(void *cb, int *handle) { if (handle) *handle = 1; return 0; }
 int LGNC_MEDIA_Finalize(void) { return NDL_MediaUnload(); }
 int LGNC_MEDIA_PlayFile(int handle, const char *path, int loop) { return NDL_MediaLoad(path, NULL); }
 int LGNC_MEDIA_PlayBuffer(unsigned int handle, const void *buf, size_t size) { return 0; }
 int LGNC_MEDIA_Stop(unsigned int handle) { return NDL_MediaUnload(); }
+int LGNC_DIRECTAUDIO_Open(void *info, int *handle) { if (handle) *handle = 1; return 0; }
+int LGNC_DIRECTAUDIO_Close(int handle) { return 0; }
+int LGNC_DIRECTAUDIO_Play(int handle, const void *buf, int size) { return 0; }
+int LGNC_MRCU_GetDeviceID(int *id) { if (id) *id = 0; return 0; }
+int LGNC_APPDRM_CheckEncrypted(const char *path, int *encrypted) { if (encrypted) *encrypted = 0; return 0; }
+int LGNC_APPDRM_open(const char *path, int flags, ...) { return open(path, flags); }
+int LGNC_APPDRM_read(int fd, void *buf, size_t count) { return (int)read(fd, buf, count); }
+int LGNC_APPDRM_close(int fd) { return close(fd); }
+int LGNC_IAP_GetAppID(char *out) { if (out) out[0] = '\0'; return 0; }
+int LGNC_IAP_GetDeviceID(char *out) { if (out) out[0] = '\0'; return 0; }
+int LGNC_IAP_GetUserID(char *out) { if (out) out[0] = '\0'; return 0; }
+int LGNC_IAP_CheckPaid(void *a, void *b) { return 0; }
 
 void *LGNC_eglGetDisplay(void *native_display) {
     if (!(SDL_WasInit(SDL_INIT_VIDEO) & SDL_INIT_VIDEO)) {
@@ -753,6 +772,7 @@ int v4l2_ioctl(int fd, unsigned long request, ...) {
             pthread_mutex_lock(&s_cam_mutex);
             s_cam_streaming = 1;
             pthread_mutex_unlock(&s_cam_mutex);
+            LOGI("v4l2_ioctl(VIDIOC_STREAMON %dx%d)", s_cam_w, s_cam_h);
             jni_call_camera("startV4L2Camera", s_cam_w, s_cam_h);
             return 0;
         case VIDIOC_STREAMOFF:

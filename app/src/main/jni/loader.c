@@ -9,6 +9,8 @@
 #include <elf.h>
 #include <link.h>
 #include <pthread.h>
+#include <sched.h>
+#include <time.h>
 #include <math.h>
 #include <errno.h>
 #include <sys/stat.h>
@@ -382,7 +384,12 @@ static void *override_istream_extract_str(void *is, void *str) {
     if (!s_real_istream_extract_str && g_libstdcpp) {
         s_real_istream_extract_str = (real_istream_extract_str_t)dlsym(g_libstdcpp, "_ZStrsIcSt11char_traitsIcESaIcEERSt13basic_istreamIT_T0_ES7_RSbIS4_S5_T1_E");
     }
-    return s_real_istream_extract_str ? s_real_istream_extract_str(is, str) : is;
+    void *ret = s_real_istream_extract_str ? s_real_istream_extract_str(is, str) : is;
+    if (str && *(char **)str) {
+        int len = *(int *)(*(char **)str - 12);
+        if (len == 0) LOGW("override_istream_extract_str: extracted empty string (is=%p)", is);
+    }
+    return ret;
 }
 
 typedef void (*real_basic_ios_init_t)(void *ios, void *sb);
@@ -917,6 +924,9 @@ static int log_Mix_VolumeMusic(int vol) {
     return r;
 }
 
+static int g_daylight = 0;
+static char *g_tzname[2] = { "UTC", "UTC" };
+
 static int (*g_captured_main)(int, char **, char **) = NULL;
 static int override_libc_start_main(
         int (*main_fn)(int, char **, char **),
@@ -969,7 +979,13 @@ static const struct SymbolOverride g_overrides[] = {
     { "LGNC_SYSTEM_GetCursorPosition", (void *)LGNC_SYSTEM_GetCursorPosition },
     { "LGNC_SYSTEM_SetCursorShape", (void *)LGNC_SYSTEM_SetCursorShape },
     { "LGNC_SYSTEM_SetCustomCursor", (void *)LGNC_SYSTEM_SetCustomCursor },
+    { "LGNC_SYSTEM_GetVolume", (void *)LGNC_SYSTEM_GetVolume },
+    { "LGNC_SYSTEM_SetVolume", (void *)LGNC_SYSTEM_SetVolume },
+    { "LGNC_SYSTEM_GetMute", (void *)LGNC_SYSTEM_GetMute },
+    { "LGNC_SYSTEM_SetMute", (void *)LGNC_SYSTEM_SetMute },
     { "LGNC_S3D_GetGraphicMode", (void *)LGNC_S3D_GetGraphicMode },
+    { "LGNC_S3D_GetVideoMode", (void *)LGNC_S3D_GetVideoMode },
+    { "LGNC_S3D_SetVideoModeOnly", (void *)LGNC_S3D_SetVideoModeOnly },
     { "LGNC_S3D_SetAllMode", (void *)LGNC_S3D_SetAllMode },
     { "LGNC_MEDIA_Initialize", (void *)LGNC_MEDIA_Initialize },
     { "LGNC_MEDIA_Finalize", (void *)LGNC_MEDIA_Finalize },
@@ -978,6 +994,40 @@ static const struct SymbolOverride g_overrides[] = {
     { "LGNC_MEDIA_Pause", (void *)dummy_stub },
     { "LGNC_MEDIA_Resume", (void *)dummy_stub },
     { "LGNC_MEDIA_Stop", (void *)LGNC_MEDIA_Stop },
+    { "LGNC_DIRECTAUDIO_Open", (void *)LGNC_DIRECTAUDIO_Open },
+    { "LGNC_DIRECTAUDIO_Close", (void *)LGNC_DIRECTAUDIO_Close },
+    { "LGNC_DIRECTAUDIO_Play", (void *)LGNC_DIRECTAUDIO_Play },
+    { "LGNC_MRCU_GetDeviceID", (void *)LGNC_MRCU_GetDeviceID },
+    { "LGNC_MRCU_RegisterSensorCallback", (void *)dummy_stub },
+    { "LGNC_MRCU_UnregisterSensorCallback", (void *)dummy_stub },
+    { "LGNC_MRCU_SetSensorDataInterval", (void *)dummy_stub },
+    { "LGNC_MRCU_SetMultiPairingMode", (void *)dummy_stub },
+    { "LGNC_MRCU_GetTimeMrcuStandbytimer", (void *)dummy_stub },
+    { "LGNC_MRCU_SetTimeMrcuStandbytimer", (void *)dummy_stub },
+    { "LGNC_MRCU_SleepSensor", (void *)dummy_stub },
+    { "LGNC_MRCU_SelectSensorData", (void *)dummy_stub },
+    { "LGNC_MRCU_SetAutoAlignment", (void *)dummy_stub },
+    { "LGNC_APPDRM_CheckEncrypted", (void *)LGNC_APPDRM_CheckEncrypted },
+    { "LGNC_APPDRM_open", (void *)LGNC_APPDRM_open },
+    { "LGNC_APPDRM_read", (void *)LGNC_APPDRM_read },
+    { "LGNC_APPDRM_close", (void *)LGNC_APPDRM_close },
+    { "LGNC_IAP_CheckPaid", (void *)LGNC_IAP_CheckPaid },
+    { "LGNC_IAP_GetAppID", (void *)LGNC_IAP_GetAppID },
+    { "LGNC_IAP_GetDeviceID", (void *)LGNC_IAP_GetDeviceID },
+    { "LGNC_IAP_GetProductInfo", (void *)dummy_stub },
+    { "LGNC_IAP_GetUserID", (void *)LGNC_IAP_GetUserID },
+    { "LGNC_IAP_Purchase", (void *)dummy_stub },
+    { "LGNC_IAP_PurchaseItem", (void *)dummy_stub },
+    { "LGNC_IAP_ReleaseProductInfo", (void *)dummy_stub },
+    { "LGNC_IAP_RequestConfirmUser", (void *)dummy_stub },
+    { "LGNC_IAP_RequestLogin", (void *)dummy_stub },
+    { "LGNC_PUSH_GetToken", (void *)dummy_stub },
+    { "LGNC_PUSH_RegisterApp", (void *)dummy_stub },
+    { "LGNC_GAMEPAD_RegisterCallback", (void *)dummy_stub },
+    { "LGNC_GAMEPAD_UnregisterCallback", (void *)dummy_stub },
+    { "LGNC_GAMEPAD_StartVibration", (void *)dummy_stub },
+    { "LGNC_GAMEPAD_StopVibration", (void *)dummy_stub },
+    { "LGNC_LOG_DBGPrint", (void *)dummy_stub },
     { "LGNC_eglGetDisplay", (void *)LGNC_eglGetDisplay },
     { "LGNC_eglInitialize", (void *)LGNC_eglInitialize },
     { "LGNC_eglGetConfigs", (void *)LGNC_eglGetConfigs },
@@ -1045,6 +1095,9 @@ static const struct SymbolOverride g_overrides[] = {
     { "__xstat", (void *)override_xstat },
     { "__libc_start_main", (void *)override_libc_start_main },
     { "__pthread_key_create", (void *)pthread_key_create },
+    { "pthread_yield", (void *)sched_yield },
+    { "__daylight", (void *)&g_daylight },
+    { "__tzname", (void *)g_tzname },
     { "pthread_setcancelstate", (void *)dummy_stub },
     { "pthread_setcanceltype", (void *)dummy_stub },
     { "pthread_cancel", (void *)dummy_stub },

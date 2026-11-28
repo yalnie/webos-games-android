@@ -144,8 +144,8 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
         if (rawPath == null || rawPath.isEmpty()) return -1;
         String p = rawPath;
         if (p.startsWith("file://")) p = p.substring(7);
-        File f = new File(p);
-        if (!f.exists() && !currentGameDir.isEmpty()) {
+        File f = null;
+        if (!currentGameDir.isEmpty() && !p.startsWith(currentGameDir)) {
             String rel = p;
             int idx = rel.indexOf("assets/");
             if (idx >= 0) rel = rel.substring(idx);
@@ -164,8 +164,12 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
                 if (fAssets.exists()) f = fAssets;
             }
         }
-        if (!f.exists()) {
-            Log.w(TAG, "ndlMediaLoad: file not found: " + rawPath + " (tried " + f.getAbsolutePath() + ")");
+        if (f == null || !f.exists()) {
+            File direct = new File(p);
+            if (direct.exists()) f = direct;
+        }
+        if (f == null || !f.exists()) {
+            Log.w(TAG, "ndlMediaLoad: file not found: " + rawPath + " (gameDir=" + currentGameDir + ", tried=" + (f != null ? f.getAbsolutePath() : "null") + ")");
             return 0;
         }
         try {
@@ -177,7 +181,12 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
                         .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                         .build());
             }
-            mp.setDataSource(f.getAbsolutePath());
+            java.io.FileInputStream fis = new java.io.FileInputStream(f);
+            try {
+                mp.setDataSource(fis.getFD());
+            } finally {
+                fis.close();
+            }
             mp.setLooping(true);
             mp.setVolume(1.0f, 1.0f);
             mp.prepare();
@@ -186,7 +195,7 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
             Log.i(TAG, "ndlMediaLoad playing: " + f.getAbsolutePath());
             return 0;
         } catch (Exception e) {
-            Log.e(TAG, "ndlMediaLoad error", e);
+            Log.e(TAG, "ndlMediaLoad error for " + rawPath + " -> " + f.getAbsolutePath(), e);
             return 0;
         }
     }
