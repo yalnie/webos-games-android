@@ -938,16 +938,16 @@ static const struct SymbolOverride g_overrides[];
 static void *override_dlsym(void *handle, const char *symbol) {
     if (symbol) {
         for (int i = 0; g_overrides[i].name != NULL; i++) {
-            if (strcmp(symbol, g_overrides[i].name) == 0 && g_overrides[i].addr) {
-                return g_overrides[i].addr;
+            if (strcmp(symbol, g_overrides[i].name) == 0 && g_overrides[i].func) {
+                return g_overrides[i].func;
             }
         }
         if (strncmp(symbol, "egl", 3) == 0) {
             char lgnc_name[128];
             snprintf(lgnc_name, sizeof(lgnc_name), "LGNC_%s", symbol);
             for (int i = 0; g_overrides[i].name != NULL; i++) {
-                if (strcmp(lgnc_name, g_overrides[i].name) == 0 && g_overrides[i].addr) {
-                    return g_overrides[i].addr;
+                if (strcmp(lgnc_name, g_overrides[i].name) == 0 && g_overrides[i].func) {
+                    return g_overrides[i].func;
                 }
             }
         }
