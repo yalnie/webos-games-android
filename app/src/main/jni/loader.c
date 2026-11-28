@@ -365,6 +365,26 @@ static void override_string_leak_hard(void *str) {
     }
 }
 
+typedef void *(*real_getline_t)(void *is, void *str, char delim);
+static real_getline_t s_real_getline = NULL;
+static void *override_getline(void *is, void *str, char delim) {
+    fix_empty_rep(str);
+    if (!s_real_getline && g_libstdcpp) {
+        s_real_getline = (real_getline_t)dlsym(g_libstdcpp, "_ZSt7getlineIcSt11char_traitsIcESaIcEERSt13basic_istreamIT_T0_ES7_RSbIS4_S5_T1_ES4_");
+    }
+    return s_real_getline ? s_real_getline(is, str, delim) : is;
+}
+
+typedef void *(*real_istream_extract_str_t)(void *is, void *str);
+static real_istream_extract_str_t s_real_istream_extract_str = NULL;
+static void *override_istream_extract_str(void *is, void *str) {
+    fix_empty_rep(str);
+    if (!s_real_istream_extract_str && g_libstdcpp) {
+        s_real_istream_extract_str = (real_istream_extract_str_t)dlsym(g_libstdcpp, "_ZStrsIcSt11char_traitsIcESaIcEERSt13basic_istreamIT_T0_ES7_RSbIS4_S5_T1_E");
+    }
+    return s_real_istream_extract_str ? s_real_istream_extract_str(is, str) : is;
+}
+
 typedef void (*real_basic_ios_init_t)(void *ios, void *sb);
 static real_basic_ios_init_t s_real_basic_ios_init = NULL;
 
@@ -604,6 +624,9 @@ static const uint8_t s_silent_wav[44] = {
 static FILE *override_fopen(const char *filename, const char *mode) {
     if (!filename) return NULL;
     FILE *f = fopen(filename, mode);
+    if (!f) {
+        LOGW("override_fopen(%s, %s) failed: %s", filename, mode ? mode : "", strerror(errno));
+    }
     if (!f && strstr(filename, ".wav")) {
         LOGW("Audio file [%s] not found, providing silent dummy WAV stream", filename);
         FILE *dummy = fopen("dummy_silent.wav", "wb");
@@ -1035,6 +1058,8 @@ static const struct SymbolOverride g_overrides[] = {
     { "_ZNSsaSERKSs", (void *)override_string_op_assign_str },
     { "_ZNSs7replaceEjjPKcj", (void *)override_string_replace },
     { "_ZNSs12_M_leak_hardEv", (void *)override_string_leak_hard },
+    { "_ZSt7getlineIcSt11char_traitsIcESaIcEERSt13basic_istreamIT_T0_ES7_RSbIS4_S5_T1_ES4_", (void *)override_getline },
+    { "_ZStrsIcSt11char_traitsIcESaIcEERSt13basic_istreamIT_T0_ES7_RSbIS4_S5_T1_E", (void *)override_istream_extract_str },
     { "_ZNSs4_Rep10_M_disposeERKSaIcE", (void *)override_string_rep_dispose },
     { "_ZNSs4_Rep10_M_destroyERKSaIcE", (void *)override_string_rep_destroy },
 
