@@ -1,7 +1,6 @@
 #include "webos_bridge.h"
 #include "cJSON.h"
 #include "SDL.h"
-#include <jni.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -316,102 +315,14 @@ int NDL_UnregisterServiceCallback(NDL_Callback cb) {
     return 0;
 }
 
-/* NDL Media (backed by Android MediaPlayer via JNI to avoid SDL_OpenAudio conflict) */
-static jclass find_main_activity_class(JNIEnv *env) {
-    if (!env) return NULL;
-    jobject act = (jobject)SDL_AndroidGetActivity();
-    if (!act) return NULL;
-    jclass cls = (*env)->GetObjectClass(env, act);
-    (*env)->DeleteLocalRef(env, act);
-    return cls;
-}
-
+/* NDL Media */
 int NDL_MediaInit(const char *appId) { return 0; }
-
-int NDL_MediaQuit(void) {
-    return NDL_MediaUnload();
-}
-
-int NDL_MediaLoad(const char *mediaInfo, void *cb) {
-    if (!mediaInfo) return 0;
-    char path_buf[512] = {0};
-    if (mediaInfo[0] == '{') {
-        cJSON *root = cJSON_Parse(mediaInfo);
-        if (root) {
-            cJSON *src = cJSON_GetObjectItem(root, "source");
-            if (!src) src = cJSON_GetObjectItem(root, "uri");
-            if (!src) src = cJSON_GetObjectItem(root, "file");
-            if (!src) src = cJSON_GetObjectItem(root, "path");
-            if (!src) src = cJSON_GetObjectItem(root, "url");
-            if (!src) src = cJSON_GetObjectItem(root, "src");
-            if (src && src->valuestring) {
-                strncpy(path_buf, src->valuestring, sizeof(path_buf) - 1);
-            }
-            cJSON_Delete(root);
-        }
-    } else {
-        strncpy(path_buf, mediaInfo, sizeof(path_buf) - 1);
-    }
-
-    JNIEnv *env = (JNIEnv *)SDL_AndroidGetJNIEnv();
-    jclass cls = find_main_activity_class(env);
-    int res = 1;
-    if (env && cls) {
-        jmethodID mid = (*env)->GetStaticMethodID(env, cls, "ndlMediaLoad", "(Ljava/lang/String;)I");
-        if (mid) {
-            jstring jpath = (*env)->NewStringUTF(env, path_buf);
-            res = (*env)->CallStaticIntMethod(env, cls, mid, jpath);
-            (*env)->DeleteLocalRef(env, jpath);
-        }
-        (*env)->DeleteLocalRef(env, cls);
-    }
-    return res;
-}
-
-int NDL_MediaUnload(void) {
-    JNIEnv *env = (JNIEnv *)SDL_AndroidGetJNIEnv();
-    jclass cls = find_main_activity_class(env);
-    if (env && cls) {
-        jmethodID mid = (*env)->GetStaticMethodID(env, cls, "ndlMediaUnload", "()V");
-        if (mid) (*env)->CallStaticVoidMethod(env, cls, mid);
-        (*env)->DeleteLocalRef(env, cls);
-    }
-    return 0;
-}
-
-int NDL_MediaPlay(void) {
-    JNIEnv *env = (JNIEnv *)SDL_AndroidGetJNIEnv();
-    jclass cls = find_main_activity_class(env);
-    if (env && cls) {
-        jmethodID mid = (*env)->GetStaticMethodID(env, cls, "ndlMediaPlay", "()V");
-        if (mid) (*env)->CallStaticVoidMethod(env, cls, mid);
-        (*env)->DeleteLocalRef(env, cls);
-    }
-    return 0;
-}
-
-int NDL_MediaPause(void) {
-    JNIEnv *env = (JNIEnv *)SDL_AndroidGetJNIEnv();
-    jclass cls = find_main_activity_class(env);
-    if (env && cls) {
-        jmethodID mid = (*env)->GetStaticMethodID(env, cls, "ndlMediaPause", "()V");
-        if (mid) (*env)->CallStaticVoidMethod(env, cls, mid);
-        (*env)->DeleteLocalRef(env, cls);
-    }
-    return 0;
-}
-
-int NDL_MediaSeekTo(int posMs) {
-    JNIEnv *env = (JNIEnv *)SDL_AndroidGetJNIEnv();
-    jclass cls = find_main_activity_class(env);
-    if (env && cls) {
-        jmethodID mid = (*env)->GetStaticMethodID(env, cls, "ndlMediaSeekTo", "(I)V");
-        if (mid) (*env)->CallStaticVoidMethod(env, cls, mid, (jint)posMs);
-        (*env)->DeleteLocalRef(env, cls);
-    }
-    return 0;
-}
-
+int NDL_MediaQuit(void) { return 0; }
+int NDL_MediaLoad(const char *mediaInfo, void *cb) { return 0; }
+int NDL_MediaUnload(void) { return 0; }
+int NDL_MediaPlay(void) { return 0; }
+int NDL_MediaPause(void) { return 0; }
+int NDL_MediaSeekTo(int posMs) { return 0; }
 int NDL_MediaSubscribeEvents(void *cb, void *userData) { return 0; }
 const char *NDL_MediaGetError(void) { return ""; }
 
