@@ -40,6 +40,7 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
 
     private static Camera sCamera;
     private static SurfaceTexture sCamTexture;
+    private static android.os.HandlerThread sCamThread;
     private static int sCamW = 640;
     private static int sCamH = 480;
 
@@ -102,11 +103,6 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
         }
 
         sensorManager = (SensorManager) getSystemService(SENSOR_SERVICE);
-        if (android.os.Build.VERSION.SDK_INT >= 23) {
-            if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(new String[] { Manifest.permission.CAMERA }, 1002);
-            }
-        }
     }
 
     @Override
@@ -138,65 +134,84 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
         System.exit(0);
     }
 
-    public static synchronized int startV4L2Camera(int reqW, int reqH) {
+    public static synchronized int startV4L2Camera(final int reqW, final int reqH) {
         if (sCamera != null) return 0;
-        try {
-            int camId = -1;
-            Camera.CameraInfo info = new Camera.CameraInfo();
-            int count = Camera.getNumberOfCameras();
-            for (int i = 0; i < count; i++) {
-                Camera.getCameraInfo(i, info);
-                if (info.facing == Camera.CameraInfo.CAMERA_FACING_FRONT) {
-                    camId = i;
-                    break;
-                }
-            }
-            if (camId < 0 && count > 0) camId = 0;
-            if (camId < 0) return -1;
-
-            Camera cam = Camera.open(camId);
-            Camera.Parameters params = cam.getParameters();
-            Camera.Size best = null;
-            int bestDiff = Integer.MAX_VALUE;
-            for (Camera.Size sz : params.getSupportedPreviewSizes()) {
-                int diff = Math.abs(sz.width - reqW) + Math.abs(sz.height - reqH);
-                if (diff < bestDiff) {
-                    bestDiff = diff;
-                    best = sz;
-                }
-            }
-            if (best != null) {
-                sCamW = best.width;
-                sCamH = best.height;
-                params.setPreviewSize(sCamW, sCamH);
-            }
-            params.setPreviewFormat(ImageFormat.NV21);
-            cam.setParameters(params);
-
-            sCamTexture = new SurfaceTexture(0);
-            cam.setPreviewTexture(sCamTexture);
-
-            int bufSize = sCamW * sCamH * ImageFormat.getBitsPerPixel(ImageFormat.NV21) / 8;
-            cam.addCallbackBuffer(new byte[bufSize]);
-            cam.addCallbackBuffer(new byte[bufSize]);
-            cam.setPreviewCallbackWithBuffer(new Camera.PreviewCallback() {
-                @Override
-                public void onPreviewFrame(byte[] data, Camera camera) {
-                    if (data != null) {
-                        nativeUpdateCameraFrame(data, sCamW, sCamH);
-                        camera.addCallbackBuffer(data);
-                    }
-                }
-            });
-            cam.startPreview();
-            sCamera = cam;
-            Log.i(TAG, "Started Android Camera " + camId + " (" + sCamW + "x" + sCamH + ")");
-            return 0;
-        } catch (Exception e) {
-            Log.e(TAG, "startV4L2Camera failed", e);
-            stopV4L2Camera();
-            return -1;
+        final int[] result = new int[] { -1 };
+        final Object lock = new Object();
+        if (sCamThread == null) {
+            sCamThread = new android.os.HandlerThread("V4L2Camera");
+            sCamThread.start();
         }
+        android.os.Handler handler = new android.os.Handler(sCamThread.getLooper());
+        handler.post(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    int camId = -1;
+                    Camera.CameraInfo info = new Camera.CameraInfo();
+                    int count = Camera.getNumberOfCameras();
+                    for (int i = 0; i < count; i++) {
+                        Camera.getCameraInfo(i, info);
+                        if (info.facing == Camera.CameraInfo.CAMERA_FACING_FRONT) {
+                            camId = i;
+                            break;
+                        }
+                    }
+                    if (camId < 0 && count > 0) camId = 0;
+                    if (camId >= 0) {
+                        Camera cam = Camera.open(camId);
+                        Camera.Parameters params = cam.getParameters();
+                        Camera.Size best = null;
+                        int bestDiff = Integer.MAX_VALUE;
+                        for (Camera.Size sz : params.getSupportedPreviewSizes()) {
+                            int diff = Math.abs(sz.width - reqW) + Math.abs(sz.height - reqH);
+                            if (diff < bestDiff) {
+                                bestDiff = diff;
+                                best = sz;
+                            }
+                        }
+                        if (best != null) {
+                            sCamW = best.width;
+                            sCamH = best.height;
+                            params.setPreviewSize(sCamW, sCamH);
+                        }
+                        params.setPreviewFormat(ImageFormat.NV21);
+                        cam.setParameters(params);
+
+                        sCamTexture = new SurfaceTexture(0);
+                        cam.setPreviewTexture(sCamTexture);
+
+                        int bufSize = sCamW * sCamH * ImageFormat.getBitsPerPixel(ImageFormat.NV21) / 8;
+                        cam.addCallbackBuffer(new byte[bufSize]);
+                        cam.addCallbackBuffer(new byte[bufSize]);
+                        cam.setPreviewCallbackWithBuffer(new Camera.PreviewCallback() {
+                            @Override
+                            public void onPreviewFrame(byte[] data, Camera camera) {
+                                if (data != null) {
+                                    nativeUpdateCameraFrame(data, sCamW, sCamH);
+                                    camera.addCallbackBuffer(data);
+                                }
+                            }
+                        });
+                        cam.startPreview();
+                        sCamera = cam;
+                        result[0] = 0;
+                        Log.i(TAG, "Started Android Camera " + camId + " (" + sCamW + "x" + sCamH + ")");
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "startV4L2Camera failed", e);
+                }
+                synchronized (lock) {
+                    lock.notifyAll();
+                }
+            }
+        });
+        synchronized (lock) {
+            try {
+                lock.wait(3000);
+            } catch (InterruptedException ignored) {}
+        }
+        return result[0];
     }
 
     public static synchronized void stopV4L2Camera() {

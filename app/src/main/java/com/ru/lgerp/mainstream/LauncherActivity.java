@@ -1,10 +1,12 @@
 package com.ru.lgerp.mainstream;
 
+import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.ProgressDialog;
 import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
@@ -29,7 +31,10 @@ import java.util.List;
 
 public class LauncherActivity extends Activity {
     private static final int REQ_PICK_IPK = 1001;
+    private static final int REQ_CAMERA_PERM = 1002;
     private static final int MENU_INSTALL_ID = 1;
+
+    private IpkInstaller.GameEntry pendingCameraGame = null;
 
     private List<IpkInstaller.GameEntry> games = new ArrayList<>();
     private GameAdapter adapter;
@@ -187,13 +192,56 @@ public class LauncherActivity extends Activity {
         emptyContainer.setVisibility(isEmpty ? View.VISIBLE : View.GONE);
     }
 
+    private static boolean requiresCamera(IpkInstaller.GameEntry game) {
+        File bin = new File(game.dir, game.main);
+        if (!bin.exists() || !bin.isFile()) return false;
+        byte[] needle = "/dev/video".getBytes();
+        byte[] buf = new byte[65536];
+        int match = 0;
+        try (java.io.FileInputStream fis = new java.io.FileInputStream(bin)) {
+            int n;
+            while ((n = fis.read(buf)) > 0) {
+                for (int i = 0; i < n; i++) {
+                    if (buf[i] == needle[match]) {
+                        match++;
+                        if (match == needle.length) return true;
+                    } else {
+                        match = (buf[i] == needle[0]) ? 1 : 0;
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+        return false;
+    }
+
     private void launchGame(IpkInstaller.GameEntry game) {
+        if (android.os.Build.VERSION.SDK_INT >= 23 && requiresCamera(game)) {
+            if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                pendingCameraGame = game;
+                requestPermissions(new String[] { Manifest.permission.CAMERA }, REQ_CAMERA_PERM);
+                return;
+            }
+        }
+        startGameActivity(game);
+    }
+
+    private void startGameActivity(IpkInstaller.GameEntry game) {
         Intent intent = new Intent(this, MainActivity.class);
         intent.putExtra(MainActivity.EXTRA_GAME_DIR, game.dir.getAbsolutePath());
         intent.putExtra(MainActivity.EXTRA_GAME_MAIN, game.main);
         intent.putExtra(MainActivity.EXTRA_GAME_WIDTH, game.width);
         intent.putExtra(MainActivity.EXTRA_GAME_HEIGHT, game.height);
         startActivity(intent);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQ_CAMERA_PERM && pendingCameraGame != null) {
+            IpkInstaller.GameEntry game = pendingCameraGame;
+            pendingCameraGame = null;
+            startGameActivity(game);
+        }
     }
 
     private void confirmUninstall(final IpkInstaller.GameEntry game) {
