@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <linux/videodev2.h>
+#include <GLES2/gl2.h>
 #include <android/log.h>
 
 #define TAG "MainstreamBridge"
@@ -444,7 +445,30 @@ static int s_lgnc_w = 1920;
 static int s_lgnc_h = 1080;
 static int s_lgnc_es_ver = 1;
 
-int LGNC_SYSTEM_Initialize(int argc, char **argv, void *cb) { return 0; }
+typedef int (*lgnc_msg_cb_t)(int msg, int submsg, void *data);
+typedef int (*lgnc_key_cb_t)(unsigned int key, int state, void *ev);
+typedef int (*lgnc_mouse_cb_t)(int x, int y, int btn, unsigned int event_type, void *ev);
+static lgnc_msg_cb_t s_lgnc_msg_cb = NULL;
+static lgnc_key_cb_t s_lgnc_key_cb = NULL;
+static lgnc_mouse_cb_t s_lgnc_mouse_cb = NULL;
+
+struct lgnc_input_event {
+    struct timeval time;
+    uint16_t type;
+    uint16_t code;
+    int32_t value;
+};
+
+int LGNC_SYSTEM_Initialize(int argc, char **argv, void *cb) {
+    if (cb) {
+        void **cbs = (void **)cb;
+        s_lgnc_msg_cb = (lgnc_msg_cb_t)cbs[0];
+        s_lgnc_key_cb = (lgnc_key_cb_t)cbs[1];
+        s_lgnc_mouse_cb = (lgnc_mouse_cb_t)cbs[2];
+        LOGI("LGNC_SYSTEM_Initialize: msg=%p key=%p mouse=%p", cbs[0], cbs[1], cbs[2]);
+    }
+    return 0;
+}
 int LGNC_SYSTEM_Finalize(void) { return 0; }
 int LGNC_SYSTEM_GetLanguage(char *out) { if (out) strcpy(out, "en"); return 0; }
 int LGNC_SYSTEM_GetSaveDirectory(char *out) { if (out) strcpy(out, "."); return 0; }
@@ -590,9 +614,132 @@ int LGNC_eglQuerySurface(void *dpy, void *surface, int attribute, int *value) {
     return 1;
 }
 
+static int sdl_key_to_linux(SDL_Keycode sym) {
+    switch (sym) {
+        case SDLK_UP: case SDLK_w: return 103;      /* KEY_UP */
+        case SDLK_DOWN: case SDLK_s: return 108;    /* KEY_DOWN */
+        case SDLK_LEFT: case SDLK_a: return 105;    /* KEY_LEFT */
+        case SDLK_RIGHT: case SDLK_d: return 106;   /* KEY_RIGHT */
+        case SDLK_RETURN: case SDLK_KP_ENTER: case SDLK_SELECT: return 28; /* KEY_ENTER */
+        case SDLK_SPACE: return 57;                /* KEY_SPACE */
+        case SDLK_ESCAPE: case SDLK_AC_BACK: case SDLK_BACKSPACE: return 1; /* KEY_ESC */
+        default: return (int)sym;
+    }
+}
+
+static void lgnc_compute_viewport(int win_w, int win_h, int *vx, int *vy, int *vw, int *vh) {
+    int gw = s_lgnc_w > 0 ? s_lgnc_w : 1920;
+    int gh = s_lgnc_h > 0 ? s_lgnc_h : 1080;
+    if (win_w <= 0 || win_h <= 0) {
+        *vx = 0; *vy = 0; *vw = gw; *vh = gh;
+        return;
+    }
+    if ((long long)win_w * gh > (long long)win_h * gw) {
+        *vh = win_h;
+        *vw = (int)((long long)win_h * gw / gh);
+        *vx = (win_w - *vw) / 2;
+        *vy = 0;
+    } else {
+        *vw = win_w;
+        *vh = (int)((long long)win_w * gh / gw);
+        *vx = 0;
+        *vy = (win_h - *vh) / 2;
+    }
+}
+
 int LGNC_eglSwapBuffers(void *dpy, void *surface) {
-    SDL_PumpEvents();
-    if (s_lgnc_window) SDL_GL_SwapWindow(s_lgnc_window);
+    int win_w = s_lgnc_w, win_h = s_lgnc_h;
+    int draw_w = s_lgnc_w, draw_h = s_lgnc_h;
+    if (s_lgnc_window) {
+        SDL_GetWindowSize(s_lgnc_window, &win_w, &win_h);
+        SDL_GL_GetDrawableSize(s_lgnc_window, &draw_w, &draw_h);
+    }
+
+    int mx_vp_x = 0, mx_vp_y = 0, mx_vp_w = win_w, mx_vp_h = win_h;
+    lgnc_compute_viewport(win_w, win_h, &mx_vp_x, &mx_vp_y, &mx_vp_w, &mx_vp_h);
+
+    SDL_Event ev;
+    while (SDL_PollEvent(&ev)) {
+        if (ev.type == SDL_MOUSEMOTION && mx_vp_w > 0 && mx_vp_h > 0) {
+            int gx = (int)(((float)(ev.motion.x - mx_vp_x)) * (float)s_lgnc_w / (float)mx_vp_w);
+            int gy = (int)(((float)(ev.motion.y - mx_vp_y)) * (float)s_lgnc_h / (float)mx_vp_h);
+            if (gx < 0) gx = 0;
+            if (gx > s_lgnc_w) gx = s_lgnc_w;
+            if (gy < 0) gy = 0;
+            if (gy > s_lgnc_h) gy = s_lgnc_h;
+            webos_update_pointer(gx, gy);
+            if (s_lgnc_mouse_cb) {
+                struct lgnc_input_event iev;
+                memset(&iev, 0, sizeof(iev));
+                gettimeofday(&iev.time, NULL);
+                iev.type = 3;
+                s_lgnc_mouse_cb(gx, gy, 0, 6, &iev);
+            }
+        } else if ((ev.type == SDL_MOUSEBUTTONDOWN || ev.type == SDL_MOUSEBUTTONUP) && mx_vp_w > 0 && mx_vp_h > 0) {
+            int gx = (int)(((float)(ev.button.x - mx_vp_x)) * (float)s_lgnc_w / (float)mx_vp_w);
+            int gy = (int)(((float)(ev.button.y - mx_vp_y)) * (float)s_lgnc_h / (float)mx_vp_h);
+            if (gx < 0) gx = 0;
+            if (gx > s_lgnc_w) gx = s_lgnc_w;
+            if (gy < 0) gy = 0;
+            if (gy > s_lgnc_h) gy = s_lgnc_h;
+            webos_update_pointer(gx, gy);
+            if (s_lgnc_mouse_cb) {
+                int btn = (ev.button.button == SDL_BUTTON_RIGHT) ? 273 : 272; /* BTN_RIGHT / BTN_LEFT */
+                unsigned int etype = (ev.type == SDL_MOUSEBUTTONDOWN) ? 0u : 1u;
+                struct lgnc_input_event iev;
+                memset(&iev, 0, sizeof(iev));
+                gettimeofday(&iev.time, NULL);
+                iev.type = 1;
+                iev.code = (uint16_t)btn;
+                iev.value = (ev.type == SDL_MOUSEBUTTONDOWN) ? 1 : 0;
+                s_lgnc_mouse_cb(gx, gy, btn, etype, &iev);
+            }
+        } else if ((ev.type == SDL_KEYDOWN || ev.type == SDL_KEYUP) && !ev.key.repeat) {
+            if (s_lgnc_key_cb) {
+                int lkey = sdl_key_to_linux(ev.key.keysym.sym);
+                int state = (ev.type == SDL_KEYDOWN) ? 0 : 1;
+                struct lgnc_input_event iev;
+                memset(&iev, 0, sizeof(iev));
+                gettimeofday(&iev.time, NULL);
+                iev.type = 1;
+                iev.code = (uint16_t)lkey;
+                iev.value = (ev.type == SDL_KEYDOWN) ? 1 : 0;
+                s_lgnc_key_cb((unsigned int)lkey, state, &iev);
+            }
+        }
+    }
+
+    if (s_lgnc_window) {
+        int vp_x = 0, vp_y = 0, vp_w = draw_w, vp_h = draw_h;
+        lgnc_compute_viewport(draw_w, draw_h, &vp_x, &vp_y, &vp_w, &vp_h);
+        if (draw_w > vp_w || draw_h > vp_h) {
+            GLboolean was_scissor = glIsEnabled(GL_SCISSOR_TEST);
+            GLint old_scissor[4] = {0};
+            GLfloat old_clear[4] = {0};
+            glGetIntegerv(GL_SCISSOR_BOX, old_scissor);
+            glGetFloatv(GL_COLOR_CLEAR_VALUE, old_clear);
+
+            glEnable(GL_SCISSOR_TEST);
+            glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+            if (vp_x > 0) {
+                glScissor(0, 0, vp_x, draw_h);
+                glClear(GL_COLOR_BUFFER_BIT);
+                glScissor(vp_x + vp_w, 0, draw_w - (vp_x + vp_w), draw_h);
+                glClear(GL_COLOR_BUFFER_BIT);
+            }
+            if (vp_y > 0) {
+                glScissor(0, 0, draw_w, vp_y);
+                glClear(GL_COLOR_BUFFER_BIT);
+                glScissor(0, vp_y + vp_h, draw_w, draw_h - (vp_y + vp_h));
+                glClear(GL_COLOR_BUFFER_BIT);
+            }
+
+            glClearColor(old_clear[0], old_clear[1], old_clear[2], old_clear[3]);
+            glScissor(old_scissor[0], old_scissor[1], old_scissor[2], old_scissor[3]);
+            if (!was_scissor) glDisable(GL_SCISSOR_TEST);
+        }
+        SDL_GL_SwapWindow(s_lgnc_window);
+    }
     return 1;
 }
 
