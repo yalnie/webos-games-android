@@ -442,6 +442,7 @@ static SDL_Window *s_lgnc_window = NULL;
 static SDL_GLContext s_lgnc_glctx = NULL;
 static int s_lgnc_w = 1920;
 static int s_lgnc_h = 1080;
+static int s_lgnc_es_ver = 1;
 
 int LGNC_SYSTEM_Initialize(int argc, char **argv, void *cb) { return 0; }
 int LGNC_SYSTEM_Finalize(void) { return 0; }
@@ -513,6 +514,14 @@ int LGNC_eglGetConfigs(void *dpy, void **configs, int config_size, int *num_conf
 }
 
 int LGNC_eglChooseConfig(void *dpy, const int *attrib_list, void **configs, int config_size, int *num_config) {
+    if (attrib_list) {
+        for (int i = 0; attrib_list[i] != 0x3038 /* EGL_NONE */; i += 2) {
+            if (attrib_list[i] == 0x3040 /* EGL_RENDERABLE_TYPE */) {
+                if (attrib_list[i + 1] & 4) s_lgnc_es_ver = 2;
+                else if (attrib_list[i + 1] & 1) s_lgnc_es_ver = 1;
+            }
+        }
+    }
     if (configs && config_size > 0) configs[0] = (void *)1;
     if (num_config) *num_config = 1;
     return 1;
@@ -520,7 +529,7 @@ int LGNC_eglChooseConfig(void *dpy, const int *attrib_list, void **configs, int 
 
 int LGNC_eglGetConfigAttrib(void *dpy, void *config, int attribute, int *value) {
     if (value) {
-        if (attribute == 0x3040) *value = 4; /* EGL_RENDERABLE_TYPE = EGL_OPENGL_ES2_BIT */
+        if (attribute == 0x3040) *value = (s_lgnc_es_ver == 1) ? 1 : 4;
         else *value = 8;
     }
     return 1;
@@ -529,20 +538,38 @@ int LGNC_eglGetConfigAttrib(void *dpy, void *config, int attribute, int *value) 
 void *LGNC_eglCreateWindowSurface(void *dpy, void *config, void *win, const int *attrib_list) {
     if (!s_lgnc_window) {
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, s_lgnc_es_ver);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, (s_lgnc_es_ver == 1) ? 1 : 0);
         s_lgnc_window = SDL_CreateWindow("LGNC", 0, 0, s_lgnc_w, s_lgnc_h,
                                          SDL_WINDOW_OPENGL | SDL_WINDOW_FULLSCREEN);
+        LOGI("LGNC_eglCreateWindowSurface: created %dx%d window (GLES %d)", s_lgnc_w, s_lgnc_h, s_lgnc_es_ver);
     }
     return (void *)s_lgnc_window;
 }
 
 void *LGNC_eglCreateContext(void *dpy, void *config, void *share_context, const int *attrib_list) {
+    int req_ver = s_lgnc_es_ver;
+    if (attrib_list) {
+        for (int i = 0; attrib_list[i] != 0x3038 /* EGL_NONE */; i += 2) {
+            if (attrib_list[i] == 0x3098 /* EGL_CONTEXT_CLIENT_VERSION */) {
+                req_ver = attrib_list[i + 1];
+            }
+        }
+    }
+    if (s_lgnc_window && req_ver != s_lgnc_es_ver) {
+        if (s_lgnc_glctx) { SDL_GL_DeleteContext(s_lgnc_glctx); s_lgnc_glctx = NULL; }
+        SDL_DestroyWindow(s_lgnc_window);
+        s_lgnc_window = NULL;
+        s_lgnc_es_ver = req_ver;
+    } else {
+        s_lgnc_es_ver = req_ver;
+    }
     if (!s_lgnc_window) {
         LGNC_eglCreateWindowSurface(dpy, config, NULL, NULL);
     }
     if (!s_lgnc_glctx && s_lgnc_window) {
         s_lgnc_glctx = SDL_GL_CreateContext(s_lgnc_window);
+        LOGI("LGNC_eglCreateContext: GLES %d ctx=%p", s_lgnc_es_ver, s_lgnc_glctx);
     }
     return (void *)s_lgnc_glctx;
 }
