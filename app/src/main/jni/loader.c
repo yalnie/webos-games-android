@@ -60,6 +60,16 @@ JNIEXPORT void JNICALL Java_com_ru_lgerp_mainstream_MainActivity_nativeUpdateSen
     webos_update_sensors(gx, gy, gz, ax, ay, az, q0, q1, q2, q3);
 }
 
+JNIEXPORT void JNICALL Java_com_ru_lgerp_mainstream_MainActivity_nativeUpdateCameraFrame(
+        JNIEnv *env, jclass cls, jbyteArray nv21, jint width, jint height) {
+    if (!nv21) return;
+    jbyte *bytes = (*env)->GetByteArrayElements(env, nv21, NULL);
+    if (bytes) {
+        webos_update_camera_frame((const unsigned char *)bytes, (int)width, (int)height);
+        (*env)->ReleaseByteArrayElements(env, nv21, bytes, JNI_ABORT);
+    }
+}
+
 static FILE *g_stderr_ptr = NULL;
 static FILE *g_stdout_ptr = NULL;
 static void *g_libstdcpp = NULL;
@@ -410,7 +420,7 @@ static void override_settings_load(void *self, void *filename_str) {
     const char *fname = filename_str ? *(const char **)filename_str : "./settings.ini";
     if (!fname || !*fname) fname = "./settings.ini";
     FILE *f = fopen(fname, "rb");
-    if (!f) f = fopen("./settings.ini", "rb");
+    if (!f && strstr(fname, "settings.ini")) f = fopen("./settings.ini", "rb");
     if (!f) {
         LOGW("override_settings_load: failed to open %s", fname);
         return;
@@ -436,14 +446,44 @@ static void override_settings_load(void *self, void *filename_str) {
             int val = atoi(rest);
             s_settings_set_int(self, key, val);
         } else if (type == 1 && s_settings_set_str && str_ctor && str_dtor) {
-            char valbuf[768] = {0};
+            char valbuf[4096] = {0};
             const char *lbrace = strchr(rest, '{');
-            const char *rbrace = lbrace ? strchr(lbrace + 1, '}') : NULL;
-            if (lbrace && rbrace && (size_t)(rbrace - lbrace - 1) < sizeof(valbuf)) {
-                memcpy(valbuf, lbrace + 1, (size_t)(rbrace - lbrace - 1));
-                valbuf[rbrace - lbrace - 1] = '\0';
+            if (lbrace) {
+                const char *content = lbrace + 1;
+                const char *rbrace = strchr(content, '}');
+                if (rbrace) {
+                    size_t len = (size_t)(rbrace - content);
+                    if (len >= sizeof(valbuf)) len = sizeof(valbuf) - 1;
+                    memcpy(valbuf, content, len);
+                    valbuf[len] = '\0';
+                } else {
+                    /* Multi-line { ... } block */
+                    size_t used = 0;
+                    size_t clen = strlen(content);
+                    if (clen >= sizeof(valbuf)) clen = sizeof(valbuf) - 1;
+                    memcpy(valbuf, content, clen);
+                    used = clen;
+                    valbuf[used] = '\0';
+                    while (fgets(line, sizeof(line), f)) {
+                        const char *rb = strchr(line, '}');
+                        if (rb) {
+                            size_t part = (size_t)(rb - line);
+                            if (used + part >= sizeof(valbuf)) part = sizeof(valbuf) - 1 - used;
+                            memcpy(valbuf + used, line, part);
+                            used += part;
+                            valbuf[used] = '\0';
+                            break;
+                        } else {
+                            size_t part = strlen(line);
+                            if (used + part >= sizeof(valbuf)) part = sizeof(valbuf) - 1 - used;
+                            memcpy(valbuf + used, line, part);
+                            used += part;
+                            valbuf[used] = '\0';
+                        }
+                    }
+                }
             } else {
-                sscanf(rest, "%767s", valbuf);
+                sscanf(rest, "%4095s", valbuf);
             }
             char std_str[16] = {0};
             char dummy_alloc[4] = {0};
@@ -795,6 +835,12 @@ static const struct SymbolOverride g_overrides[] = {
 
     /* Libc / Math / C++ overrides */
     { "fopen", (void *)override_fopen },
+    { "open", (void *)v4l2_open },
+    { "close", (void *)v4l2_close },
+    { "ioctl", (void *)v4l2_ioctl },
+    { "select", (void *)v4l2_select },
+    { "mmap", (void *)v4l2_mmap },
+    { "munmap", (void *)v4l2_munmap },
     { "free", (void *)safe_free },
     { "ftime", (void *)ftime },
     { "__errno_location", (void *)override_errno_location },

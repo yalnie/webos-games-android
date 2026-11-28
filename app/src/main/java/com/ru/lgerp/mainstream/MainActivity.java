@@ -1,6 +1,11 @@
 package com.ru.lgerp.mainstream;
 
+import android.Manifest;
+import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
+import android.graphics.ImageFormat;
+import android.graphics.SurfaceTexture;
+import android.hardware.Camera;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
@@ -31,6 +36,12 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
 
     public static native void nativeSetGameConfig(String gameDir, String gameMain, int width, int height);
     public static native void nativeUpdateSensors(float gx, float gy, float gz, float ax, float ay, float az, float q0, float q1, float q2, float q3);
+    public static native void nativeUpdateCameraFrame(byte[] nv21, int width, int height);
+
+    private static Camera sCamera;
+    private static SurfaceTexture sCamTexture;
+    private static int sCamW = 640;
+    private static int sCamH = 480;
 
     private SensorManager sensorManager;
     private final float[] gyroVals = new float[3];
@@ -91,6 +102,11 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
         }
 
         sensorManager = (SensorManager) getSystemService(SENSOR_SERVICE);
+        if (android.os.Build.VERSION.SDK_INT >= 23) {
+            if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[] { Manifest.permission.CAMERA }, 1002);
+            }
+        }
     }
 
     @Override
@@ -116,9 +132,86 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
 
     @Override
     protected void onDestroy() {
+        stopV4L2Camera();
         super.onDestroy();
         // Exit :game process cleanly so fixed ELF mappings can reload another game cleanly
         System.exit(0);
+    }
+
+    public static synchronized int startV4L2Camera(int reqW, int reqH) {
+        if (sCamera != null) return 0;
+        try {
+            int camId = -1;
+            Camera.CameraInfo info = new Camera.CameraInfo();
+            int count = Camera.getNumberOfCameras();
+            for (int i = 0; i < count; i++) {
+                Camera.getCameraInfo(i, info);
+                if (info.facing == Camera.CameraInfo.CAMERA_FACING_FRONT) {
+                    camId = i;
+                    break;
+                }
+            }
+            if (camId < 0 && count > 0) camId = 0;
+            if (camId < 0) return -1;
+
+            Camera cam = Camera.open(camId);
+            Camera.Parameters params = cam.getParameters();
+            Camera.Size best = null;
+            int bestDiff = Integer.MAX_VALUE;
+            for (Camera.Size sz : params.getSupportedPreviewSizes()) {
+                int diff = Math.abs(sz.width - reqW) + Math.abs(sz.height - reqH);
+                if (diff < bestDiff) {
+                    bestDiff = diff;
+                    best = sz;
+                }
+            }
+            if (best != null) {
+                sCamW = best.width;
+                sCamH = best.height;
+                params.setPreviewSize(sCamW, sCamH);
+            }
+            params.setPreviewFormat(ImageFormat.NV21);
+            cam.setParameters(params);
+
+            sCamTexture = new SurfaceTexture(0);
+            cam.setPreviewTexture(sCamTexture);
+
+            int bufSize = sCamW * sCamH * ImageFormat.getBitsPerPixel(ImageFormat.NV21) / 8;
+            cam.addCallbackBuffer(new byte[bufSize]);
+            cam.addCallbackBuffer(new byte[bufSize]);
+            cam.setPreviewCallbackWithBuffer(new Camera.PreviewCallback() {
+                @Override
+                public void onPreviewFrame(byte[] data, Camera camera) {
+                    if (data != null) {
+                        nativeUpdateCameraFrame(data, sCamW, sCamH);
+                        camera.addCallbackBuffer(data);
+                    }
+                }
+            });
+            cam.startPreview();
+            sCamera = cam;
+            Log.i(TAG, "Started Android Camera " + camId + " (" + sCamW + "x" + sCamH + ")");
+            return 0;
+        } catch (Exception e) {
+            Log.e(TAG, "startV4L2Camera failed", e);
+            stopV4L2Camera();
+            return -1;
+        }
+    }
+
+    public static synchronized void stopV4L2Camera() {
+        try {
+            if (sCamera != null) {
+                sCamera.setPreviewCallbackWithBuffer(null);
+                sCamera.stopPreview();
+                sCamera.release();
+                sCamera = null;
+            }
+            if (sCamTexture != null) {
+                sCamTexture.release();
+                sCamTexture = null;
+            }
+        } catch (Exception ignored) {}
     }
 
     @Override

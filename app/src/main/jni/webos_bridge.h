@@ -2,6 +2,8 @@
 #define WEBOS_BRIDGE_H
 
 #include <stddef.h>
+
+#include <stddef.h>
 #include <stdint.h>
 #include <sys/time.h>
 
@@ -83,6 +85,15 @@ int LGNC_eglDestroySurface(void *dpy, void *surface);
 int LGNC_eglDestroyContext(void *dpy, void *ctx);
 int LGNC_eglTerminate(void *dpy);
 int LGNC_eglGetError(void);
+
+/* Virtual V4L2 Camera (/dev/video0 -> Android Camera) */
+void webos_update_camera_frame(const unsigned char *nv21, int w, int h);
+int v4l2_open(const char *pathname, int flags, ...);
+int v4l2_close(int fd);
+int v4l2_ioctl(int fd, unsigned long request, ...);
+int v4l2_select(int nfds, void *readfds, void *writefds, void *exceptfds, void *timeout);
+void *v4l2_mmap(void *addr, size_t length, int prot, int flags, int fd, long offset);
+int v4l2_munmap(void *addr, size_t length);
 
 /* Curl Stubs */
 void *curl_easy_init(void);

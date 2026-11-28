@@ -1,9 +1,20 @@
 #include "webos_bridge.h"
 #include "cJSON.h"
 #include "SDL.h"
+#include <jni.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <pthread.h>
+#include <sys/mman.h>
+#include <sys/select.h>
+#include <sys/stat.h>
+#include <sys/time.h>
+#include <linux/videodev2.h>
 #include <android/log.h>
 
 #define TAG "MainstreamBridge"
@@ -452,6 +463,242 @@ int LGNC_eglDestroySurface(void *dpy, void *surface) { return 1; }
 int LGNC_eglDestroyContext(void *dpy, void *ctx) { return 1; }
 int LGNC_eglTerminate(void *dpy) { return 1; }
 int LGNC_eglGetError(void) { return 0x3000; /* EGL_SUCCESS */ }
+
+/* Virtual V4L2 Camera (/dev/video0 -> Android Camera) */
+#define V4L2_FAKE_FD 0x70001001
+static pthread_mutex_t s_cam_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t s_cam_cond = PTHREAD_COND_INITIALIZER;
+static int s_cam_open = 0;
+static int s_cam_streaming = 0;
+static int s_cam_w = 640;
+static int s_cam_h = 480;
+static unsigned char *s_cam_yuyv_buf = NULL;
+static size_t s_cam_buf_len = 0;
+static int s_cam_frame_ready = 0;
+
+static void jni_call_camera(const char *method, int w, int h) {
+    JNIEnv *env = (JNIEnv *)SDL_AndroidGetJNIEnv();
+    jobject act = env ? (jobject)SDL_AndroidGetActivity() : NULL;
+    if (env && act) {
+        jclass cls = (*env)->GetObjectClass(env, act);
+        if (cls) {
+            if (strcmp(method, "startV4L2Camera") == 0) {
+                jmethodID mid = (*env)->GetStaticMethodID(env, cls, "startV4L2Camera", "(II)I");
+                if (mid) (*env)->CallStaticIntMethod(env, cls, mid, (jint)w, (jint)h);
+            } else {
+                jmethodID mid = (*env)->GetStaticMethodID(env, cls, "stopV4L2Camera", "()V");
+                if (mid) (*env)->CallStaticVoidMethod(env, cls, mid);
+            }
+            (*env)->DeleteLocalRef(env, cls);
+        }
+        (*env)->DeleteLocalRef(env, act);
+    }
+}
+
+void webos_update_camera_frame(const unsigned char *nv21, int src_w, int src_h) {
+    if (!nv21 || src_w <= 0 || src_h <= 0) return;
+    pthread_mutex_lock(&s_cam_mutex);
+    if (!s_cam_open || !s_cam_yuyv_buf) {
+        pthread_mutex_unlock(&s_cam_mutex);
+        return;
+    }
+    int dst_w = s_cam_w;
+    int dst_h = s_cam_h;
+    const unsigned char *y_plane = nv21;
+    const unsigned char *vu_plane = nv21 + src_w * src_h;
+
+    for (int y = 0; y < dst_h; y++) {
+        int sy = (y * src_h) / dst_h;
+        int uv_row = (sy >> 1) * src_w;
+        int y_row = sy * src_w;
+        unsigned char *out = s_cam_yuyv_buf + (y * dst_w * 2);
+        for (int x = 0; x < dst_w; x += 2) {
+            int sx0 = (x * src_w) / dst_w;
+            int sx1 = ((x + 1) * src_w) / dst_w;
+            unsigned char y0 = y_plane[y_row + sx0];
+            unsigned char y1 = y_plane[y_row + sx1];
+            int uv_idx = uv_row + (sx0 & ~1);
+            unsigned char v = vu_plane[uv_idx];
+            unsigned char u = vu_plane[uv_idx + 1];
+            out[0] = y0;
+            out[1] = u;
+            out[2] = y1;
+            out[3] = v;
+            out += 4;
+        }
+    }
+    s_cam_frame_ready = 1;
+    pthread_cond_broadcast(&s_cam_cond);
+    pthread_mutex_unlock(&s_cam_mutex);
+}
+
+int v4l2_open(const char *pathname, int flags, ...) {
+    mode_t mode = 0;
+    if (flags & O_CREAT) {
+        va_list ap;
+        va_start(ap, flags);
+        mode = (mode_t)va_arg(ap, int);
+        va_end(ap);
+    }
+    if (pathname && strncmp(pathname, "/dev/video", 10) == 0) {
+        pthread_mutex_lock(&s_cam_mutex);
+        s_cam_open = 1;
+        s_cam_streaming = 0;
+        s_cam_frame_ready = 0;
+        if (!s_cam_yuyv_buf) {
+            s_cam_buf_len = (size_t)s_cam_w * (size_t)s_cam_h * 2;
+            s_cam_yuyv_buf = (unsigned char *)calloc(1, s_cam_buf_len);
+        }
+        pthread_mutex_unlock(&s_cam_mutex);
+        LOGI("v4l2_open(%s) -> virtual camera fd", pathname);
+        return V4L2_FAKE_FD;
+    }
+    return (flags & O_CREAT) ? open(pathname, flags, mode) : open(pathname, flags);
+}
+
+int v4l2_close(int fd) {
+    if (fd == V4L2_FAKE_FD) {
+        jni_call_camera("stopV4L2Camera", 0, 0);
+        pthread_mutex_lock(&s_cam_mutex);
+        s_cam_open = 0;
+        s_cam_streaming = 0;
+        pthread_cond_broadcast(&s_cam_cond);
+        pthread_mutex_unlock(&s_cam_mutex);
+        return 0;
+    }
+    return close(fd);
+}
+
+int v4l2_ioctl(int fd, unsigned long request, ...) {
+    va_list ap;
+    va_start(ap, request);
+    void *arg = va_arg(ap, void *);
+    va_end(ap);
+
+    if (fd != V4L2_FAKE_FD) {
+        return ioctl(fd, (int)request, arg);
+    }
+
+    switch (request) {
+        case VIDIOC_QUERYCAP: {
+            struct v4l2_capability *cap = (struct v4l2_capability *)arg;
+            if (!cap) { errno = EINVAL; return -1; }
+            memset(cap, 0, sizeof(*cap));
+            strcpy((char *)cap->driver, "android_v4l2");
+            strcpy((char *)cap->card, "Android Camera");
+            strcpy((char *)cap->bus_info, "platform:android");
+            cap->version = 0x00010000;
+            cap->capabilities = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING;
+            return 0;
+        }
+        case VIDIOC_CROPCAP: {
+            struct v4l2_cropcap *cc = (struct v4l2_cropcap *)arg;
+            if (!cc) { errno = EINVAL; return -1; }
+            memset(cc, 0, sizeof(*cc));
+            cc->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+            cc->bounds.width = s_cam_w;
+            cc->bounds.height = s_cam_h;
+            cc->defrect = cc->bounds;
+            cc->pixelaspect.numerator = 1;
+            cc->pixelaspect.denominator = 1;
+            return 0;
+        }
+        case VIDIOC_S_FMT: {
+            struct v4l2_format *fmt = (struct v4l2_format *)arg;
+            if (!fmt) { errno = EINVAL; return -1; }
+            pthread_mutex_lock(&s_cam_mutex);
+            if (fmt->fmt.pix.width > 0 && fmt->fmt.pix.height > 0) {
+                s_cam_w = (int)fmt->fmt.pix.width;
+                s_cam_h = (int)fmt->fmt.pix.height;
+            }
+            s_cam_buf_len = (size_t)s_cam_w * (size_t)s_cam_h * 2;
+            free(s_cam_yuyv_buf);
+            s_cam_yuyv_buf = (unsigned char *)calloc(1, s_cam_buf_len);
+            fmt->fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
+            fmt->fmt.pix.field = V4L2_FIELD_NONE;
+            fmt->fmt.pix.bytesperline = (uint32_t)(s_cam_w * 2);
+            fmt->fmt.pix.sizeimage = (uint32_t)s_cam_buf_len;
+            pthread_mutex_unlock(&s_cam_mutex);
+            return 0;
+        }
+        case VIDIOC_REQBUFS: {
+            struct v4l2_requestbuffers *req = (struct v4l2_requestbuffers *)arg;
+            if (!req) { errno = EINVAL; return -1; }
+            if (req->count > 1) req->count = 1;
+            return 0;
+        }
+        case VIDIOC_QUERYBUF: {
+            struct v4l2_buffer *buf = (struct v4l2_buffer *)arg;
+            if (!buf) { errno = EINVAL; return -1; }
+            buf->length = (uint32_t)s_cam_buf_len;
+            buf->m.offset = 0;
+            buf->bytesused = (uint32_t)s_cam_buf_len;
+            return 0;
+        }
+        case VIDIOC_QBUF:
+            return 0;
+        case VIDIOC_DQBUF: {
+            struct v4l2_buffer *buf = (struct v4l2_buffer *)arg;
+            if (!buf) { errno = EINVAL; return -1; }
+            pthread_mutex_lock(&s_cam_mutex);
+            if (!s_cam_frame_ready && s_cam_open && s_cam_streaming) {
+                struct timespec ts;
+                clock_gettime(CLOCK_REALTIME, &ts);
+                ts.tv_nsec += 50000000L;
+                if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
+                pthread_cond_timedwait(&s_cam_cond, &s_cam_mutex, &ts);
+            }
+            s_cam_frame_ready = 0;
+            buf->index = 0;
+            buf->bytesused = (uint32_t)s_cam_buf_len;
+            pthread_mutex_unlock(&s_cam_mutex);
+            return 0;
+        }
+        case VIDIOC_STREAMON:
+            pthread_mutex_lock(&s_cam_mutex);
+            s_cam_streaming = 1;
+            pthread_mutex_unlock(&s_cam_mutex);
+            jni_call_camera("startV4L2Camera", s_cam_w, s_cam_h);
+            return 0;
+        case VIDIOC_STREAMOFF:
+            pthread_mutex_lock(&s_cam_mutex);
+            s_cam_streaming = 0;
+            pthread_mutex_unlock(&s_cam_mutex);
+            jni_call_camera("stopV4L2Camera", 0, 0);
+            return 0;
+        default:
+            errno = EINVAL;
+            return -1;
+    }
+}
+
+int v4l2_select(int nfds, void *readfds, void *writefds, void *exceptfds, void *timeout) {
+    if (nfds > V4L2_FAKE_FD || (s_cam_open && nfds == V4L2_FAKE_FD + 1)) {
+        return 1;
+    }
+    return select(nfds, (fd_set *)readfds, (fd_set *)writefds, (fd_set *)exceptfds, (struct timeval *)timeout);
+}
+
+void *v4l2_mmap(void *addr, size_t length, int prot, int flags, int fd, long offset) {
+    if (fd == V4L2_FAKE_FD) {
+        pthread_mutex_lock(&s_cam_mutex);
+        if (!s_cam_yuyv_buf && length > 0) {
+            s_cam_buf_len = length;
+            s_cam_yuyv_buf = (unsigned char *)calloc(1, length);
+        }
+        void *p = s_cam_yuyv_buf;
+        pthread_mutex_unlock(&s_cam_mutex);
+        return p ? p : MAP_FAILED;
+    }
+    return mmap(addr, length, prot, flags, fd, (off_t)offset);
+}
+
+int v4l2_munmap(void *addr, size_t length) {
+    if (addr && addr == s_cam_yuyv_buf) {
+        return 0;
+    }
+    return munmap(addr, length);
+}
 
 /* Curl Stubs */
 void *curl_easy_init(void) {
