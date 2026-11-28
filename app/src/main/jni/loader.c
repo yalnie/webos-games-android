@@ -727,6 +727,11 @@ static int override_SDL_PollEvent(SDL_Event *event) {
 }
 
 static int override_xstat(int ver, const char *path, struct stat *buf) {
+    if (path && strncmp(path, "/dev/video", 10) == 0 && buf) {
+        memset(buf, 0, sizeof(*buf));
+        buf->st_mode = S_IFCHR | 0666;
+        return 0;
+    }
     return stat(path, buf);
 }
 
