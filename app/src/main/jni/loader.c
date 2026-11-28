@@ -548,7 +548,18 @@ static void override_settings_load(void *self, void *filename_str) {
             }
             char std_str[16] = {0};
             char dummy_alloc[4] = {0};
-            str_ctor(std_str, valbuf, dummy_alloc);
+            /* Strip CR (\r) and trim a single leading/trailing LF (\n) inside { ... } */
+            size_t r = 0, w = 0;
+            while (valbuf[r]) {
+                if (valbuf[r] != '\r') valbuf[w++] = valbuf[r];
+                r++;
+            }
+            valbuf[w] = '\0';
+            char *trimmed = valbuf;
+            if (trimmed[0] == '\n') trimmed++;
+            size_t tlen = strlen(trimmed);
+            if (tlen > 0 && trimmed[tlen - 1] == '\n') trimmed[tlen - 1] = '\0';
+            str_ctor(std_str, trimmed, dummy_alloc);
             s_settings_set_str(self, key, std_str);
             str_dtor(std_str);
         }
@@ -1304,7 +1315,8 @@ int SDL_main(int argc, char *argv[]) {
         }
     }
 
-    if (settings_load_addr && settings_set_int_addr && settings_set_str_addr) {
+    if (settings_load_addr && settings_set_int_addr && settings_set_str_addr &&
+        strcmp(bin_name, "mainstream") != 0 && strcmp(bin_name, "beanvasion") != 0) {
         s_settings_set_int = (settings_set_int_t)settings_set_int_addr;
         s_settings_set_str = (settings_set_str_t)settings_set_str_addr;
         uintptr_t page = settings_load_addr & ~0xFFFU;
