@@ -43,6 +43,7 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
     private static Camera sCamera;
     private static SurfaceTexture sCamTexture;
     private static android.os.HandlerThread sCamThread;
+    private static volatile boolean sCameraPermitted = false;
     private static int sCamW = 640;
     private static int sCamH = 480;
     private static MediaPlayer ndlMediaPlayer;
@@ -81,6 +82,8 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
         }
 
         currentGameDir = gameDir;
+        sCameraPermitted = (android.os.Build.VERSION.SDK_INT < 23)
+                || (checkSelfPermission(android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED);
         super.onCreate(savedInstanceState);
         if (!mBrokenLibraries) {
             nativeSetGameConfig(gameDir, gameMain, gameW, gameH);
@@ -255,7 +258,12 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
         } catch (Exception ignored) {}
     }
 
+    public static boolean isV4L2CameraAvailable() {
+        return sCameraPermitted && Camera.getNumberOfCameras() > 0;
+    }
+
     public static synchronized int startV4L2Camera(final int reqW, final int reqH) {
+        if (!isV4L2CameraAvailable()) return -1;
         if (sCamera != null) return 0;
         final int[] result = new int[] { -1 };
         final Object lock = new Object();

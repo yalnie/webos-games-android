@@ -846,6 +846,10 @@ static int override_SDL_PollEvent(SDL_Event *event) {
 
 static int override_xstat(int ver, const char *path, void *buf) {
     if (path && strncmp(path, "/dev/video", 10) == 0 && buf) {
+        if (!webos_is_camera_available()) {
+            errno = ENOENT;
+            return -1;
+        }
         /* Glibc ARM32 struct stat has st_mode at offset 0x10 (bionic has it at 0x14) */
         memset(buf, 0, 128);
         *(uint32_t *)((char *)buf + 0x10) = S_IFCHR | 0666;

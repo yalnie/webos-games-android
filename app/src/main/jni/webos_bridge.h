@@ -110,6 +110,7 @@ int LGNC_eglBindAPI(int api);
 int LGNC_eglTrue(void);
 
 /* Virtual V4L2 Camera (/dev/video0 -> Android Camera) */
+int webos_is_camera_available(void);
 void webos_update_camera_frame(const unsigned char *nv21, int w, int h);
 int v4l2_open(const char *pathname, int flags, ...);
 int v4l2_close(int fd);

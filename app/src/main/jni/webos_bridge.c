@@ -640,6 +640,22 @@ static void jni_call_camera(const char *method, int w, int h) {
     }
 }
 
+int webos_is_camera_available(void) {
+    JNIEnv *env = (JNIEnv *)SDL_AndroidGetJNIEnv();
+    jobject act = env ? (jobject)SDL_AndroidGetActivity() : NULL;
+    int avail = 0;
+    if (env && act) {
+        jclass cls = (*env)->GetObjectClass(env, act);
+        if (cls) {
+            jmethodID mid = (*env)->GetStaticMethodID(env, cls, "isV4L2CameraAvailable", "()Z");
+            if (mid) avail = (*env)->CallStaticBooleanMethod(env, cls, mid) ? 1 : 0;
+            (*env)->DeleteLocalRef(env, cls);
+        }
+        (*env)->DeleteLocalRef(env, act);
+    }
+    return avail;
+}
+
 void webos_update_camera_frame(const unsigned char *nv21, int src_w, int src_h) {
     if (!nv21 || src_w <= 0 || src_h <= 0) return;
     pthread_mutex_lock(&s_cam_mutex);
@@ -686,6 +702,11 @@ int v4l2_open(const char *pathname, int flags, ...) {
         va_end(ap);
     }
     if (pathname && strncmp(pathname, "/dev/video", 10) == 0) {
+        if (!webos_is_camera_available()) {
+            LOGW("v4l2_open(%s) -> camera unavailable/permission denied, returning ENOENT", pathname);
+            errno = ENOENT;
+            return -1;
+        }
         pthread_mutex_lock(&s_cam_mutex);
         s_cam_open = 1;
         s_cam_streaming = 0;
