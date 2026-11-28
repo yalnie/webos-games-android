@@ -735,6 +735,50 @@ static int override_xstat(int ver, const char *path, struct stat *buf) {
     return stat(path, buf);
 }
 
+/* Diagnostic pass-through wrappers for SDL2_mixer music */
+typedef int (*mix_init_t)(int flags);
+typedef int (*mix_open_audio_t)(int freq, uint16_t fmt, int ch, int chunk);
+typedef void *(*mix_load_mus_t)(const char *file);
+typedef int (*mix_play_mus_t)(void *mus, int loops);
+typedef int (*mix_vol_mus_t)(int vol);
+typedef const char *(*sdl_get_err_t)(void);
+
+static int log_Mix_Init(int flags) {
+    mix_init_t fn = (mix_init_t)dlsym(RTLD_DEFAULT, "Mix_Init");
+    int r = fn ? fn(flags) : 0;
+    LOGI("Mix_Init(0x%x) -> 0x%x", flags, r);
+    return r;
+}
+static int log_Mix_OpenAudio(int freq, uint16_t fmt, int ch, int chunk) {
+    mix_open_audio_t fn = (mix_open_audio_t)dlsym(RTLD_DEFAULT, "Mix_OpenAudio");
+    int r = fn ? fn(freq, fmt, ch, chunk) : -1;
+    LOGI("Mix_OpenAudio(%d, 0x%x, %d, %d) -> %d", freq, fmt, ch, chunk, r);
+    return r;
+}
+static void *log_Mix_LoadMUS(const char *file) {
+    mix_load_mus_t fn = (mix_load_mus_t)dlsym(RTLD_DEFAULT, "Mix_LoadMUS");
+    void *r = fn ? fn(file) : NULL;
+    if (!r) {
+        sdl_get_err_t ge = (sdl_get_err_t)dlsym(RTLD_DEFAULT, "SDL_GetError");
+        LOGW("Mix_LoadMUS(%s) -> NULL (err=%s)", file ? file : "null", ge ? ge() : "?");
+    } else {
+        LOGI("Mix_LoadMUS(%s) -> %p", file ? file : "null", r);
+    }
+    return r;
+}
+static int log_Mix_PlayMusic(void *mus, int loops) {
+    mix_play_mus_t fn = (mix_play_mus_t)dlsym(RTLD_DEFAULT, "Mix_PlayMusic");
+    int r = fn ? fn(mus, loops) : -1;
+    LOGI("Mix_PlayMusic(%p, %d) -> %d", mus, loops, r);
+    return r;
+}
+static int log_Mix_VolumeMusic(int vol) {
+    mix_vol_mus_t fn = (mix_vol_mus_t)dlsym(RTLD_DEFAULT, "Mix_VolumeMusic");
+    int r = fn ? fn(vol) : -1;
+    LOGI("Mix_VolumeMusic(%d) -> %d", vol, r);
+    return r;
+}
+
 static int (*g_captured_main)(int, char **, char **) = NULL;
 static int override_libc_start_main(
         int (*main_fn)(int, char **, char **),
@@ -889,6 +933,11 @@ static const struct SymbolOverride g_overrides[] = {
     { "glScissor", (void *)override_glScissor },
     { "SDL_PollEvent", (void *)override_SDL_PollEvent },
     { "SDL_RenderPresent", (void *)override_SDL_RenderPresent },
+    { "Mix_Init", (void *)log_Mix_Init },
+    { "Mix_OpenAudio", (void *)log_Mix_OpenAudio },
+    { "Mix_LoadMUS", (void *)log_Mix_LoadMUS },
+    { "Mix_PlayMusic", (void *)log_Mix_PlayMusic },
+    { "Mix_VolumeMusic", (void *)log_Mix_VolumeMusic },
 
     { NULL, NULL }
 };
