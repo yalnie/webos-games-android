@@ -378,7 +378,7 @@ static void *override_getline(void *is, void *str, char delim) {
     if (ret) {
         int voff = *(int *)(*(void **)ret - 12);
         int state = *(int *)((char *)ret + voff + 20);
-        if ((state & 5) == 4) LOGW("override_getline: failbit set (is=%p state=0x%x)", is, state);
+        if ((state & 5) != 0 && state != 6) LOGW("override_getline: error state (is=%p state=0x%x)", is, state);
     }
     return ret;
 }
@@ -935,6 +935,15 @@ static char *g_tzname[2] = { "UTC", "UTC" };
 
 static const struct SymbolOverride g_overrides[];
 
+static ssize_t override_readlink(const char *pathname, char *buf, size_t bufsiz) {
+    if (pathname && strcmp(pathname, "/proc/self/exe") == 0 && g_game_dir[0]) {
+        int n = snprintf(buf, bufsiz, "%s/%s", g_game_dir, g_game_main);
+        if (n < 0) return -1;
+        return ((size_t)n >= bufsiz) ? (ssize_t)bufsiz : (ssize_t)n;
+    }
+    return readlink(pathname, buf, bufsiz);
+}
+
 static void *override_dlsym(void *handle, const char *symbol) {
     if (symbol) {
         for (int i = 0; g_overrides[i].name != NULL; i++) {
@@ -947,6 +956,7 @@ static void *override_dlsym(void *handle, const char *symbol) {
             snprintf(lgnc_name, sizeof(lgnc_name), "LGNC_%s", symbol);
             for (int i = 0; g_overrides[i].name != NULL; i++) {
                 if (strcmp(lgnc_name, g_overrides[i].name) == 0 && g_overrides[i].func) {
+                    LOGI("override_dlsym(%s) -> %s", symbol, lgnc_name);
                     return g_overrides[i].func;
                 }
             }
@@ -1129,6 +1139,7 @@ static const struct SymbolOverride g_overrides[] = {
     { "__libc_start_main", (void *)override_libc_start_main },
     { "__pthread_key_create", (void *)pthread_key_create },
     { "dlsym", (void *)override_dlsym },
+    { "readlink", (void *)override_readlink },
     { "pthread_yield", (void *)sched_yield },
     { "__daylight", (void *)&g_daylight },
     { "__tzname", (void *)g_tzname },

@@ -610,7 +610,7 @@ int LGNC_eglBindAPI(int api) { return 1; }
 int LGNC_eglTrue(void) { return 1; }
 
 /* Virtual V4L2 Camera (/dev/video0 -> Android Camera) */
-#define V4L2_FAKE_FD 0x70001001
+#define V4L2_FAKE_FD 1020
 static pthread_mutex_t s_cam_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t s_cam_cond = PTHREAD_COND_INITIALIZER;
 static int s_cam_open = 0;

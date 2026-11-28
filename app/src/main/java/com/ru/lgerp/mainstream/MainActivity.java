@@ -112,6 +112,20 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
     }
 
     @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) {
+            getWindow().getDecorView().setSystemUiVisibility(
+                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                    | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                    | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                    | View.SYSTEM_UI_FLAG_FULLSCREEN
+                    | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+        }
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
         try {
@@ -266,7 +280,17 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
                     }
                     if (camId < 0 && count > 0) camId = 0;
                     if (camId >= 0) {
-                        Camera cam = Camera.open(camId);
+                        Camera cam = null;
+                        try {
+                            cam = Camera.open(camId);
+                        } catch (Exception e) {
+                            Log.w(TAG, "Camera.open(" + camId + ") failed, trying fallback 0", e);
+                            if (camId != 0 && count > 0) {
+                                cam = Camera.open(0);
+                            } else {
+                                throw e;
+                            }
+                        }
                         Camera.Parameters params = cam.getParameters();
                         Camera.Size best = null;
                         int bestDiff = Integer.MAX_VALUE;
