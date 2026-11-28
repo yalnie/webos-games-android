@@ -698,6 +698,12 @@ static void ensure_viewport_metrics(void) {
 }
 
 static void override_glViewport(GLint x, GLint y, GLsizei width, GLsizei height) {
+    GLint fb = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fb);
+    if (fb != 0) {
+        glViewport(x, y, width, height);
+        return;
+    }
     ensure_viewport_metrics();
     if (s_vp_w > 0 && s_vp_h > 0) {
         GLint nx = s_vp_x + (GLint)((float)x * s_vp_w / (float)g_game_w);
@@ -711,6 +717,12 @@ static void override_glViewport(GLint x, GLint y, GLsizei width, GLsizei height)
 }
 
 static void override_glScissor(GLint x, GLint y, GLsizei width, GLsizei height) {
+    GLint fb = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fb);
+    if (fb != 0) {
+        glScissor(x, y, width, height);
+        return;
+    }
     ensure_viewport_metrics();
     if (s_vp_w > 0 && s_vp_h > 0) {
         GLint nx = s_vp_x + (GLint)((float)x * s_vp_w / (float)g_game_w);
