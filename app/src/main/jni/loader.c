@@ -726,13 +726,41 @@ static int override_SDL_PollEvent(SDL_Event *event) {
     return res;
 }
 
-static int override_xstat(int ver, const char *path, struct stat *buf) {
+static int override_xstat(int ver, const char *path, void *buf) {
     if (path && strncmp(path, "/dev/video", 10) == 0 && buf) {
-        memset(buf, 0, sizeof(*buf));
-        buf->st_mode = S_IFCHR | 0666;
+        /* Glibc ARM32 struct stat has st_mode at offset 0x10 (bionic has it at 0x14) */
+        memset(buf, 0, 128);
+        *(uint32_t *)((char *)buf + 0x10) = S_IFCHR | 0666;
+        *(uint32_t *)((char *)buf + 0x14) = 1; /* st_nlink */
         return 0;
     }
-    return stat(path, buf);
+    return stat(path, (struct stat *)buf);
+}
+
+/* Resolve relative paths to absolute paths so Android SDL_RWFromFile opens from gameDir instead of APK assets */
+static const char *resolve_game_relpath(const char *file, char *out, size_t out_sz) {
+    if (!file || file[0] == '/') return file;
+    const char *p = file;
+    if (p[0] == '.' && p[1] == '/') p += 2;
+    char cwd[1024];
+    if (getcwd(cwd, sizeof(cwd))) {
+        snprintf(out, out_sz, "%s/%s", cwd, p);
+        return out;
+    }
+    return file;
+}
+
+typedef void *(*sdl_rw_from_file_t)(const char *file, const char *mode);
+static void *override_SDL_RWFromFile(const char *file, const char *mode) {
+    sdl_rw_from_file_t fn = (sdl_rw_from_file_t)dlsym(RTLD_DEFAULT, "SDL_RWFromFile");
+    if (!fn) return NULL;
+    char abs_path[1280];
+    const char *resolved = resolve_game_relpath(file, abs_path, sizeof(abs_path));
+    void *rw = fn(resolved, mode);
+    if (!rw && resolved != file) {
+        rw = fn(file, mode);
+    }
+    return rw;
 }
 
 /* Diagnostic pass-through wrappers for SDL2_mixer music */
@@ -757,12 +785,17 @@ static int log_Mix_OpenAudio(int freq, uint16_t fmt, int ch, int chunk) {
 }
 static void *log_Mix_LoadMUS(const char *file) {
     mix_load_mus_t fn = (mix_load_mus_t)dlsym(RTLD_DEFAULT, "Mix_LoadMUS");
-    void *r = fn ? fn(file) : NULL;
+    char abs_path[1280];
+    const char *resolved = resolve_game_relpath(file, abs_path, sizeof(abs_path));
+    void *r = fn ? fn(resolved) : NULL;
+    if (!r && resolved != file) {
+        r = fn ? fn(file) : NULL;
+    }
     if (!r) {
         sdl_get_err_t ge = (sdl_get_err_t)dlsym(RTLD_DEFAULT, "SDL_GetError");
-        LOGW("Mix_LoadMUS(%s) -> NULL (err=%s)", file ? file : "null", ge ? ge() : "?");
+        LOGW("Mix_LoadMUS(%s -> %s) -> NULL (err=%s)", file ? file : "null", resolved ? resolved : "null", ge ? ge() : "?");
     } else {
-        LOGI("Mix_LoadMUS(%s) -> %p", file ? file : "null", r);
+        LOGI("Mix_LoadMUS(%s) -> %p", resolved ? resolved : "null", r);
     }
     return r;
 }
@@ -933,6 +966,7 @@ static const struct SymbolOverride g_overrides[] = {
     { "glScissor", (void *)override_glScissor },
     { "SDL_PollEvent", (void *)override_SDL_PollEvent },
     { "SDL_RenderPresent", (void *)override_SDL_RenderPresent },
+    { "SDL_RWFromFile", (void *)override_SDL_RWFromFile },
     { "Mix_Init", (void *)log_Mix_Init },
     { "Mix_OpenAudio", (void *)log_Mix_OpenAudio },
     { "Mix_LoadMUS", (void *)log_Mix_LoadMUS },
