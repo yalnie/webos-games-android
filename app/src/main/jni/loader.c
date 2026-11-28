@@ -457,6 +457,10 @@ static void *override_filebuf_open(void *fb, const char *s, int mode) {
         s_real_filebuf_open = (real_filebuf_open_t)dlsym(g_libstdcpp, "_ZNSt13basic_filebufIcSt11char_traitsIcEE4openEPKcSt13_Ios_Openmode");
     }
     void *res = s_real_filebuf_open ? s_real_filebuf_open(fb, s, mode) : NULL;
+    if (!res && s && s[0] == '/' && strncmp(s, "/data/user/", 11) != 0 && strncmp(s, "/data/data/", 11) != 0) {
+        res = s_real_filebuf_open ? s_real_filebuf_open(fb, s + 1, mode) : NULL;
+    }
+    if (!res) LOGW("filebuf::open(%s, %d) failed", s ? s : "null", mode);
     if (res) track_open_filebuf(fb);
     return res;
 }
@@ -624,6 +628,12 @@ static const uint8_t s_silent_wav[44] = {
 static FILE *override_fopen(const char *filename, const char *mode) {
     if (!filename) return NULL;
     FILE *f = fopen(filename, mode);
+    if (!f && filename[0] == '/' &&
+        strncmp(filename, "/data/user/", 11) != 0 &&
+        strncmp(filename, "/data/data/", 11) != 0 &&
+        strncmp(filename, "/system/", 8) != 0) {
+        f = fopen(filename + 1, mode);
+    }
     if (!f) {
         LOGW("override_fopen(%s, %s) failed: %s", filename, mode ? mode : "", strerror(errno));
     }
@@ -965,6 +975,8 @@ static const struct SymbolOverride g_overrides[] = {
     { "LGNC_MEDIA_Finalize", (void *)LGNC_MEDIA_Finalize },
     { "LGNC_MEDIA_PlayFile", (void *)LGNC_MEDIA_PlayFile },
     { "LGNC_MEDIA_PlayBuffer", (void *)LGNC_MEDIA_PlayBuffer },
+    { "LGNC_MEDIA_Pause", (void *)dummy_stub },
+    { "LGNC_MEDIA_Resume", (void *)dummy_stub },
     { "LGNC_MEDIA_Stop", (void *)LGNC_MEDIA_Stop },
     { "LGNC_eglGetDisplay", (void *)LGNC_eglGetDisplay },
     { "LGNC_eglInitialize", (void *)LGNC_eglInitialize },
@@ -1014,6 +1026,7 @@ static const struct SymbolOverride g_overrides[] = {
 
     /* Libc / Math / C++ overrides */
     { "fopen", (void *)override_fopen },
+    { "_IO_getc", (void *)fgetc },
     { "open", (void *)v4l2_open },
     { "close", (void *)v4l2_close },
     { "ioctl", (void *)v4l2_ioctl },

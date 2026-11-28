@@ -10,6 +10,8 @@ import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
+import android.media.AudioAttributes;
+import android.media.MediaPlayer;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
@@ -43,6 +45,8 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
     private static android.os.HandlerThread sCamThread;
     private static int sCamW = 640;
     private static int sCamH = 480;
+    private static MediaPlayer ndlMediaPlayer;
+    private static String currentGameDir = "";
 
     private SensorManager sensorManager;
     private final float[] gyroVals = new float[3];
@@ -75,6 +79,7 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
             gameMain = "mainstream";
         }
 
+        currentGameDir = gameDir;
         super.onCreate(savedInstanceState);
         if (!mBrokenLibraries) {
             nativeSetGameConfig(gameDir, gameMain, gameW, gameH);
@@ -129,9 +134,89 @@ public class MainActivity extends SDLActivity implements SensorEventListener {
     @Override
     protected void onDestroy() {
         stopV4L2Camera();
+        ndlMediaUnload();
         super.onDestroy();
         // Exit :game process cleanly so fixed ELF mappings can reload another game cleanly
         System.exit(0);
+    }
+
+    public static int ndlMediaLoad(String rawPath) {
+        if (rawPath == null || rawPath.isEmpty()) return -1;
+        String p = rawPath;
+        if (p.startsWith("file://")) p = p.substring(7);
+        File f = new File(p);
+        if (!f.exists() && !currentGameDir.isEmpty()) {
+            String rel = p;
+            int idx = rel.indexOf("assets/");
+            if (idx >= 0) rel = rel.substring(idx);
+            else {
+                idx = rel.indexOf("resources/");
+                if (idx >= 0) rel = rel.substring(idx);
+                else {
+                    idx = rel.indexOf("snd/");
+                    if (idx >= 0) rel = rel.substring(idx);
+                    else while (rel.startsWith("/")) rel = rel.substring(1);
+                }
+            }
+            f = new File(currentGameDir, rel);
+            if (!f.exists() && !rel.startsWith("assets/")) {
+                File fAssets = new File(currentGameDir, "assets/" + rel);
+                if (fAssets.exists()) f = fAssets;
+            }
+        }
+        if (!f.exists()) {
+            Log.w(TAG, "ndlMediaLoad: file not found: " + rawPath + " (tried " + f.getAbsolutePath() + ")");
+            return 0;
+        }
+        try {
+            ndlMediaUnload();
+            MediaPlayer mp = new MediaPlayer();
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                mp.setAudioAttributes(new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_GAME)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build());
+            }
+            mp.setDataSource(f.getAbsolutePath());
+            mp.setLooping(true);
+            mp.setVolume(1.0f, 1.0f);
+            mp.prepare();
+            mp.start();
+            ndlMediaPlayer = mp;
+            Log.i(TAG, "ndlMediaLoad playing: " + f.getAbsolutePath());
+            return 0;
+        } catch (Exception e) {
+            Log.e(TAG, "ndlMediaLoad error", e);
+            return 0;
+        }
+    }
+
+    public static void ndlMediaPlay() {
+        try {
+            if (ndlMediaPlayer != null && !ndlMediaPlayer.isPlaying()) ndlMediaPlayer.start();
+        } catch (Exception ignored) {}
+    }
+
+    public static void ndlMediaPause() {
+        try {
+            if (ndlMediaPlayer != null && ndlMediaPlayer.isPlaying()) ndlMediaPlayer.pause();
+        } catch (Exception ignored) {}
+    }
+
+    public static void ndlMediaSeekTo(int ms) {
+        try {
+            if (ndlMediaPlayer != null) ndlMediaPlayer.seekTo(ms);
+        } catch (Exception ignored) {}
+    }
+
+    public static void ndlMediaUnload() {
+        try {
+            if (ndlMediaPlayer != null) {
+                ndlMediaPlayer.stop();
+                ndlMediaPlayer.release();
+                ndlMediaPlayer = null;
+            }
+        } catch (Exception ignored) {}
     }
 
     public static synchronized int startV4L2Camera(final int reqW, final int reqH) {
